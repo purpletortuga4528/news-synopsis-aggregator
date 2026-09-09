@@ -1,0 +1,172 @@
+# News Synopsis Aggregator
+
+A local web app that searches news sources you choose, then builds a single
+cross-source report on a topic: what the sources agree on, where they diverge,
+and what only one outlet is reporting.
+
+Everything runs on your machine. There is no account, no API key and no model
+call. Summarization is extractive: sentences are scored by word frequency and
+lifted verbatim from the articles, so nothing in the output is invented.
+
+## How it works
+
+1. You add sources. An RSS or Atom feed URL is detected automatically. Anything
+   else is treated as a search page, and you supply the name of its query
+   parameter (usually `q` or `s`).
+2. You type a topic. Feed items are matched locally with a boolean query
+   parser; search pages receive the raw query string and handle it themselves.
+3. Matching articles are fetched, stripped to their text, and summarized.
+4. Claims from every source are clustered by vocabulary overlap. A claim backed
+   by two or more sources becomes a key point; a claim backed by one is listed
+   separately rather than presented as consensus.
+
+## Requirements
+
+Python 3.8 or newer. Developed and tested on 3.12.
+
+## Install
+
+```bash
+python -m venv venv
+```
+
+```bash
+venv/Scripts/activate
+```
+
+On macOS or Linux the activate step is `source venv/bin/activate`.
+
+```bash
+pip install -r requirements.txt
+```
+
+## Run
+
+```bash
+uvicorn app:app --host 127.0.0.1 --port 8000
+```
+
+Then open <http://127.0.0.1:8000>.
+
+The server refuses any request whose `Host` or `Origin` header does not name
+this machine, so binding it to a public interface will not make it reachable.
+That is deliberate: the API has no authentication, and a localhost service that
+fetches arbitrary URLs is a tempting target for any web page you happen to have
+open. Do not expose it.
+
+## Adding sources
+
+Use the UI, or seed a starter set:
+
+```bash
+python seed_sources.py
+```
+
+The seed script reads `seed_sources.json`, verifies each feed is live before
+adding it, and skips sources whose feeds have moved or gone offline. It is safe
+to re-run: a source whose name already exists is left alone. Pass `--yes` to
+skip the confirmation prompt.
+
+**Read this before seeding.** Both the UI and the seed script ask you to attest
+that you have reviewed each outlet's Terms of Service and are satisfied that
+automated access for personal search and summarization is permitted. The seeded
+list contains official feeds published by each outlet for automated
+consumption, but that attestation is yours to make, not the script's. It does
+not research anyone's terms for you.
+
+## Search syntax
+
+| Syntax | Meaning |
+| --- | --- |
+| `climate policy` | Both terms must appear. Bare terms imply AND. |
+| `climate OR weather` | Either term. |
+| `climate NOT policy` | First term present, second absent. |
+| `climate -policy` | Same as NOT. |
+| `"carbon capture"` | Exact phrase, scored higher than loose terms. |
+| `(climate OR weather) AND policy` | Parentheses group. |
+
+Operators are case insensitive. Terms match with lightweight stemming, so
+`rescues` finds `rescue` and `running` finds `run`. Digits and non-ASCII
+letters are part of a term, so `COP29`, `election 2026` and names with
+diacritics all work. Queries are capped at 200 characters.
+
+Matches in a headline score higher than matches in a summary, and exact phrases
+score highest. This syntax applies to RSS sources, which are filtered locally.
+Search-page sources get the query string handed to their own search engine
+untouched, and it may or may not understand the same operators.
+
+## Reading the report
+
+- **Overview**: a synthesis weighted toward vocabulary that more than one source
+  uses. When the sources share no common vocabulary, it says so instead of
+  stitching unrelated sentences together and calling it agreement.
+- **Key points**: claims corroborated by two or more sources, tagged with which.
+- **Differences in coverage**: a short summary per source, so divergent framing
+  is visible side by side.
+- **Reported by one source**: claims that appeared in a single outlet.
+- **Sources**: every article the report drew on, newest first.
+
+Sources that were skipped are listed at the bottom with the reason, whether
+that is a robots.txt refusal, a network failure, or no matching items.
+
+## Crawling behaviour
+
+- `robots.txt` is honoured for every host, on the initial URL and on every
+  redirect hop. An unreachable or 401/403 `robots.txt` fails closed: the crawl
+  does not proceed.
+- Crawl-delay and request-rate directives are respected, defaulting to 2 seconds
+  between requests to the same host when a site specifies nothing.
+- Redirects are followed manually, up to 5 hops, so each hop is revalidated.
+- URLs resolving to private, loopback, link-local or reserved addresses are
+  refused, and the validated address is pinned for the connection so a second
+  DNS answer cannot redirect it somewhere internal. TLS is unaffected: the
+  certificate, SNI and Host header all still use the original hostname.
+- Responses are capped at 3 MB.
+
+Because crawl-delays are enforced per host and honoured serially, a search
+across sources with many feeds can take a while. This is the polite behaviour,
+not a bug, but see the limitations below.
+
+## Tests
+
+```bash
+python -m unittest discover -v
+```
+
+The `boolean_search` and `summarizer` tests are pure standard library, so they
+run on a fresh clone with nothing installed. `tests/test_crawler_pinning.py`
+needs the dependencies and skips cleanly without them. It verifies that the
+DNS-rebinding defence actually intercepts sockets rather than only looking as
+though it does, and will fail loudly if a urllib3 upgrade changes how the
+socket layer resolves its connect function.
+
+## Data
+
+Sources live in `sites.db`, a SQLite file in the project root, created on first
+run. It is not tracked by git. Article text is never stored; it is fetched,
+summarized and discarded within a single request.
+
+## Known limitations
+
+- **Searches are slow and have no deadline.** Feeds are re-fetched on every
+  search with no caching, and crawl-delays serialize requests to the same host.
+  A source with a dozen feeds can take a minute on its own. There is no
+  server-side timeout and no partial-result path.
+- **Feed descriptions are not stripped of HTML.** When an article page cannot be
+  fetched, the feed's own description is used as the text, and any markup in it
+  can surface as visible tags in a summary.
+- **Search-page scraping is best effort.** It follows up to 3 links from a
+  results page and extracts text generically. Sites that render results in
+  JavaScript will yield nothing.
+- **Summarization is extractive, not abstractive.** It selects sentences; it
+  does not write them. Sentences can read as disjointed out of context.
+- **Stopwords are English only.** Clustering and salience scoring handle text
+  in other languages, but common words in those languages are not filtered out,
+  so they carry more weight than they should. Two-character terms are also
+  excluded from clustering, so `EU` groups nothing even though it is
+  searchable.
+- **No authentication.** The localhost restriction is the only access control.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
