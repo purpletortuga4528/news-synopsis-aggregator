@@ -255,7 +255,10 @@ def _crawl_rss_site(site: dict, query_ast) -> dict:
         text = ""
         title = item.title
         published = item.published
-        if item.link:
+        # A news feed sometimes points at a podcast or programme page, which
+        # carries promotional furniture rather than article text. Skip the scrape
+        # and keep the feed's own blurb, so the item still contributes.
+        if item.link and crawler.looks_like_article(item.link):
             result = crawler.fetch_and_extract(item.link)
             if result.ok and len(result.text) > 200:
                 text = result.text

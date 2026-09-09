@@ -70,5 +70,71 @@ class FeedParsingTests(unittest.TestCase):
         self.assertEqual(result.items[1].link, "")
 
 
+@unittest.skipUnless(DEPS_AVAILABLE, "requires beautifulsoup4 and defusedxml")
+class ArticlePathTests(unittest.TestCase):
+    def test_site_furniture_is_rejected(self):
+        for url in (
+            "https://example.test/about",
+            "https://example.test/contact/form",
+            "https://example.test/news/rss.xml",
+            "https://example.test/subscribe",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(crawler.looks_like_article(url))
+
+    def test_media_platform_pages_are_rejected(self):
+        # A news feed can point at these. They carry promos, not article text,
+        # which then surfaced in synopses as "Find out how to listen to other
+        # BBC stations".
+        for url in (
+            "https://www.bbc.co.uk/sounds/play/m002abc",
+            "https://www.bbc.co.uk/programmes/b006qshd",
+            "https://example.test/podcasts/episode-12",
+            "https://example.test/iplayer/episode/x",
+        ):
+            with self.subTest(url=url):
+                self.assertFalse(crawler.looks_like_article(url))
+
+    def test_real_articles_are_accepted(self):
+        for url in (
+            "https://www.bbc.co.uk/news/articles/cp3k72k1y3vo",
+            "https://www.theguardian.com/politics/2026/sep/09/met-police-inquiry",
+        ):
+            with self.subTest(url=url):
+                self.assertTrue(crawler.looks_like_article(url))
+
+    def test_a_hint_inside_a_longer_word_does_not_reject(self):
+        # Regression: the old substring test threw away an article at
+        # /news/subscribers-hit-record because "/subscribe" is inside it.
+        self.assertTrue(crawler.looks_like_article("https://example.test/news/subscribers-hit-record"))
+        self.assertTrue(crawler.looks_like_article("https://example.test/news/helping-hands-charity"))
+
+
+@unittest.skipUnless(DEPS_AVAILABLE, "requires beautifulsoup4 and defusedxml")
+class SpacingTests(unittest.TestCase):
+    def test_space_before_punctuation_is_removed(self):
+        # get_text(" ") separates inline nodes, so "<a>police</a>." arrives as
+        # "police ." and reads as a typo in the finished synopsis.
+        self.assertEqual(
+            crawler._tidy_spacing("So that does increase the demand for police ."),
+            "So that does increase the demand for police.",
+        )
+
+    def test_brackets_and_percent(self):
+        self.assertEqual(
+            crawler._tidy_spacing("The report ( published today ) says 40 % ."),
+            "The report (published today) says 40%.",
+        )
+
+    def test_block_boundaries_are_never_crossed(self):
+        # A newline is a block boundary. Pulling punctuation across one would
+        # silently glue two separate blocks into a single sentence.
+        text = "Block one\n, block two"
+        self.assertEqual(crawler._tidy_spacing(text), text)
+
+    def test_ordinary_text_is_untouched(self):
+        text = "The council approved the budget after a long debate."
+        self.assertEqual(crawler._tidy_spacing(text), text)
+
 if __name__ == "__main__":
     unittest.main()

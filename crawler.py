@@ -42,11 +42,48 @@ def _pinned_create_connection(address, *args, **kwargs):
 
 _urllib3_connection.create_connection = _pinned_create_connection
 
-_NON_ARTICLE_PATH_HINTS = (
-    "/about", "/contact", "/privacy", "/terms", "/cookie", "/login", "/signin", "/signup",
-    "/register", "/subscribe", "/account", "/careers", "/jobs", "/advertise", "/help",
-    "/faq", "/sitemap", "/rss", "/newsletter", "/settings", "/preferences",
-)
+# Path segments marking a page as something other than a news article: site
+# furniture, account plumbing, and the audio/video platforms a news feed
+# sometimes points at. A BBC Sounds episode page has no article body, only
+# promos, which then surface in a synopsis as claims.
+#
+# Compared per path segment, not as a substring. A substring test rejects a
+# genuine article at /news/subscribers-hit-record, because "/subscribe" sits
+# inside "/subscribers-hit-record".
+_NON_ARTICLE_SEGMENTS = frozenset({
+    "about", "contact", "privacy", "terms", "cookie", "cookies", "login", "signin",
+    "signup", "register", "subscribe", "account", "careers", "jobs", "advertise",
+    "help", "faq", "sitemap", "rss", "feed", "feeds", "newsletter", "settings",
+    "preferences",
+    # Audio and video platform pages: no article text to extract.
+    "sounds", "programmes", "iplayer", "podcast", "podcasts", "player",
+})
+
+
+def looks_like_article(url: str) -> bool:
+    """False for a URL whose path marks it as site furniture or a media platform
+    page. Applied both when following links out of a search page and before
+    scraping a feed item's target, so one policy governs everywhere the app
+    decides something is worth fetching as an article."""
+    for segment in urllib.parse.urlparse(url).path.lower().split("/"):
+        if not segment:
+            continue
+        # Compare the stem too, so "rss.xml" and "about.html" are caught.
+        if segment in _NON_ARTICLE_SEGMENTS or segment.split(".", 1)[0] in _NON_ARTICLE_SEGMENTS:
+            return False
+    return True
+
+
+# get_text(" ") puts a space between adjacent inline nodes, so "<a>police</a>."
+# comes out as "police .". Collapse it back before closing punctuation and after
+# an opening bracket. The class excludes newlines deliberately: those are block
+# boundaries and pulling punctuation across one would re-join separate blocks.
+_SPACE_BEFORE_PUNCT_RE = re.compile(r"[^\S\n]+([,.;:!?%)\]}])")
+_SPACE_AFTER_OPEN_RE = re.compile(r"([(\[{])[^\S\n]+")
+
+
+def _tidy_spacing(text: str) -> str:
+    return _SPACE_AFTER_OPEN_RE.sub(r"\1", _SPACE_BEFORE_PUNCT_RE.sub(r"\1", text))
 
 USER_AGENT = "SynopsisCrawler/1.0 (+respects robots.txt; educational/personal use)"
 REQUEST_TIMEOUT = 10
@@ -360,7 +397,7 @@ def fetch_and_extract(url: str, same_domain_only_from: Optional[str] = None) -> 
 
     text_parts = []
     for el in soup.find_all(["h1", "h2", "h3", "p", "li"]):
-        chunk = el.get_text(" ", strip=True)
+        chunk = _tidy_spacing(el.get_text(" ", strip=True))
         if chunk:
             text_parts.append(chunk)
     # Newline, not space: each part is a separate block element, and the
@@ -371,7 +408,7 @@ def fetch_and_extract(url: str, same_domain_only_from: Optional[str] = None) -> 
     # Some sites put body text in divs/spans rather than p/li (e.g. quote blocks,
     # card layouts). Fall back to whole-page text if the targeted tags yielded little.
     if len(page_text) < 200:
-        whole_text = soup.get_text("\n", strip=True)
+        whole_text = _tidy_spacing(soup.get_text("\n", strip=True))
         if len(whole_text) > len(page_text):
             page_text = whole_text
 
@@ -393,8 +430,7 @@ def fetch_and_extract(url: str, same_domain_only_from: Optional[str] = None) -> 
             continue
         # Skip obvious non-article boilerplate (nav/footer links) so search-result
         # follow-up fetches spend their budget on actual content, not "About Us" pages.
-        path_lower = parsed_link.path.lower()
-        if any(seg in path_lower for seg in _NON_ARTICLE_PATH_HINTS):
+        if not looks_like_article(absolute):
             continue
         seen.add(absolute)
         links.append(absolute)
@@ -431,7 +467,7 @@ def _strip_html(value: str) -> str:
     """
     if not value or not _HTML_TAG_RE.search(value):
         return value
-    return BeautifulSoup(value, "html.parser").get_text(" ", strip=True)
+    return _tidy_spacing(BeautifulSoup(value, "html.parser").get_text(" ", strip=True))
 
 
 def _strip_ns(tag: str) -> str:
