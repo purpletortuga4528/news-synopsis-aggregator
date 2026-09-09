@@ -191,6 +191,18 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#39;');
 }
+function detailText(detail, fallback) {
+  // FastAPI's "detail" is a string for a plain HTTPException, an object for the
+  // structured ones this API raises, and an array for a request-validation
+  // failure. Interpolating any of the latter two renders "[object Object]".
+  if (typeof detail === 'string' && detail) return detail;
+  if (Array.isArray(detail)) {
+    const first = detail.find(d => d && typeof d.msg === 'string');
+    return first ? first.msg : fallback;
+  }
+  if (detail && typeof detail.message === 'string') return detail.message;
+  return fallback;
+}
 function isSafeHttpUrl(url) {
   return typeof url === 'string' && /^https?:\/\//i.test(url);
 }
@@ -296,7 +308,7 @@ async function addFeed(siteId, card) {
     return;
   }
   const body = await res.json().catch(() => ({}));
-  errEl.textContent = body.detail || 'Failed to add feed';
+  errEl.textContent = detailText(body.detail, 'Failed to add feed');
   errEl.style.display = '';
 }
 
@@ -351,7 +363,7 @@ document.getElementById('add-btn').addEventListener('click', async () => {
     hintEl.textContent = body.detail.message;
     hintEl.style.display = '';
   } else {
-    errEl.textContent = (body.detail && body.detail.message) || body.detail || 'Failed to add site';
+    errEl.textContent = detailText(body.detail, 'Failed to add site');
     errEl.style.display = '';
   }
 });
@@ -377,7 +389,7 @@ async function runSearch() {
     const data = await res.json();
     btn.disabled = false;
     if (!res.ok) {
-      statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(data.detail || 'Search failed')}</span>`;
+      statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(detailText(data.detail, 'Search failed'))}</span>`;
       return;
     }
     statusEl.textContent = '';
