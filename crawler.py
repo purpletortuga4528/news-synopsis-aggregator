@@ -53,6 +53,10 @@ DEFAULT_MIN_DELAY = 2.0  # seconds between requests to the same domain if robots
 MAX_CONTENT_BYTES = 3_000_000
 MAX_REDIRECTS = 5
 
+# Prefix marker so a caller can tell a robots.txt refusal apart from a generic
+# network error without the two paths having to return different shapes.
+ROBOTS_BLOCKED_ERROR = "Disallowed by robots.txt"
+
 _robots_cache: dict = {}
 _robots_lock = threading.Lock()
 _domain_last_request: dict = {}
@@ -128,22 +132,38 @@ def _is_ssrf_safe(url: str) -> bool:
     return _resolve_safe_ip(hostname) is not None
 
 
-def _safe_get(url: str, headers: dict, timeout: float, stream: bool = False):
+def _safe_get(url: str, headers: dict, timeout: float, stream: bool = False,
+              enforce_crawl_policy: bool = False):
     """requests.get with manually-validated redirect following. Every hop
     (including the initial URL) is resolved and validated before connecting,
     since a redirect can point at an internal address just as easily as the
     original URL can, and the validated IP is pinned for the actual connection
     (see _pinned_create_connection) so a second, differently-answered DNS
     lookup can't undo the check. Returns (response, None) on success or
-    (None, error_message)."""
+    (None, error_message).
+
+    With enforce_crawl_policy, each redirect hop is also checked against the
+    robots.txt of the host it lands on, and waits out that host's crawl-delay.
+    Off by default because fetching robots.txt itself goes through here, and
+    checking robots before reading robots would not terminate."""
     current = url
-    for _ in range(MAX_REDIRECTS + 1):
+    for hop in range(MAX_REDIRECTS + 1):
         parsed = urllib.parse.urlparse(current)
         if parsed.scheme not in ("http", "https") or not parsed.hostname:
             return None, "Blocked: unsupported URL"
         safe_ip = _resolve_safe_ip(parsed.hostname)
         if not safe_ip:
             return None, "Blocked: URL resolves to a non-public address"
+        # Hop 0 was already vetted by the caller. Every hop after it is a URL
+        # nobody has consented to fetch: a redirect can cross to a host whose
+        # robots.txt we have never read, and it earns the same crawl-delay
+        # courtesy as a directly requested URL. Ordered after the address check
+        # so an internal address is reported as such rather than mislabelled a
+        # robots refusal (fetching robots.txt from it would fail closed).
+        if enforce_crawl_policy and hop > 0:
+            if not is_allowed(current):
+                return None, f"{ROBOTS_BLOCKED_ERROR} (after redirect to {current})"
+            _polite_wait(current)
         _pin_state.host = parsed.hostname
         _pin_state.ip = safe_ip
         try:
@@ -294,13 +314,20 @@ def _fetch_raw(url: str, accept: str = "text/html") -> RawFetch:
     if not _is_ssrf_safe(url):
         return RawFetch(ok=False, error="Blocked: URL resolves to a non-public address")
     if not is_allowed(url):
-        return RawFetch(ok=False, blocked_by_robots=True, error="Disallowed by robots.txt")
+        return RawFetch(ok=False, blocked_by_robots=True, error=ROBOTS_BLOCKED_ERROR)
 
     _polite_wait(url)
 
-    resp, err = _safe_get(url, headers={"User-Agent": USER_AGENT, "Accept": accept}, timeout=REQUEST_TIMEOUT, stream=True)
+    resp, err = _safe_get(
+        url,
+        headers={"User-Agent": USER_AGENT, "Accept": accept},
+        timeout=REQUEST_TIMEOUT,
+        stream=True,
+        enforce_crawl_policy=True,
+    )
     if resp is None:
-        return RawFetch(ok=False, error=err)
+        blocked = bool(err) and err.startswith(ROBOTS_BLOCKED_ERROR)
+        return RawFetch(ok=False, error=err, blocked_by_robots=blocked)
     try:
         content = resp.raw.read(MAX_CONTENT_BYTES, decode_content=True)
         resp.close()
