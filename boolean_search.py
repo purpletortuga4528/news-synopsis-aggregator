@@ -8,7 +8,32 @@ Pure stdlib, no external dependencies.
 """
 import re
 
-_TOKEN_RE = re.compile(r'"[^"]*"|\(|\)|\S+')
+# A bare token must stop at a parenthesis. With a plain \S+ the closing paren
+# of "(cat OR dog) AND vet" is absorbed into the token "dog)" and then scrubbed
+# away, so the group never closes and the query silently reassociates into
+# "cat OR (dog AND vet)": a different search from the one that was typed.
+_TOKEN_RE = re.compile(r'"[^"]*"|[()]|[^\s()]+')
+
+# Unicode-aware word matching. An [A-Za-z']+ class silently deletes every digit
+# and every non-ASCII letter, which for news text is not a corner case: it turns
+# "election 2026" into a search for "election", "COP29" into "COP", and leaves a
+# name spelled with a diacritic unable to match itself. [^\W_] is "word character
+# but not underscore", so letters and digits from any script survive.
+_WORD_RE = re.compile(r"[^\W_]+(?:'[^\W_]+)*")
+# The same character class, used to scrub punctuation off a single query token.
+_QUERY_STRIP_RE = re.compile(r"[^\w']|_")
+_APOSTROPHE_RE = re.compile("[\u2019\u02bc]")  # right single quote, modifier apostrophe
+
+# Shortest term worth indexing. Two, not three: news vocabulary is full of
+# meaningful two-character terms (EU, UN, US, G7, AI) and a threshold of three
+# made every one of them unsearchable.
+MIN_TERM_LEN = 2
+
+
+def _normalize(text: str) -> str:
+    """Fold typographic apostrophes to ASCII so a feed's curly "Ireland's"
+    matches an "Ireland's" typed with a straight quote."""
+    return _APOSTROPHE_RE.sub("'", text)
 
 
 def _stem_candidates(word: str) -> set:
@@ -40,8 +65,8 @@ def _stem_candidates(word: str) -> set:
 def _text_candidates(text: str) -> set:
     """Flattened union of every word's stem candidates in a piece of text."""
     result = set()
-    for w in re.findall(r"[A-Za-z']+", text):
-        if len(w) > 2:
+    for w in _WORD_RE.findall(_normalize(text)):
+        if len(w) >= MIN_TERM_LEN:
             result |= _stem_candidates(w)
     return result
 
@@ -56,7 +81,7 @@ def _tokenize(query: str) -> list:
         if raw in ("(", ")"):
             tokens.append((raw, None))
         elif raw.startswith('"') and raw.endswith('"') and len(raw) >= 2:
-            phrase = raw[1:-1].strip().lower()
+            phrase = _normalize(raw[1:-1]).strip().lower()
             if phrase:
                 tokens.append(("PHRASE", phrase))
         elif raw.upper() == "AND":
@@ -66,10 +91,15 @@ def _tokenize(query: str) -> list:
         elif raw.upper() == "NOT":
             tokens.append(("NOT", None))
         elif raw.startswith("-") and len(raw) > 1 and raw[1].isalnum():
-            tokens.append(("NOT", None))
-            tokens.append(("WORD", raw[1:].lower()))
+            # Scrub the negated term the same way a bare term is scrubbed;
+            # otherwise "-dog," negates the literal token "dog,", and an
+            # all-punctuation tail would leave a dangling NOT with no operand.
+            word = _QUERY_STRIP_RE.sub("", _normalize(raw[1:])).lower()
+            if word:
+                tokens.append(("NOT", None))
+                tokens.append(("WORD", word))
         else:
-            word = re.sub(r"[^A-Za-z']", "", raw).lower()
+            word = _QUERY_STRIP_RE.sub("", _normalize(raw)).lower()
             if word:
                 tokens.append(("WORD", word))
     return tokens
@@ -152,8 +182,8 @@ def evaluate(node, title: str, description: str):
         return False, 0
     title_cands = _text_candidates(title)
     desc_cands = _text_candidates(description)
-    title_lower = title.lower()
-    desc_lower = description.lower()
+    title_lower = _normalize(title).lower()
+    desc_lower = _normalize(description).lower()
     return _eval(node, title_cands, desc_cands, title_lower, desc_lower)
 
 
