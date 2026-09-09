@@ -1,7 +1,9 @@
 import re
+import time
 import urllib.parse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import List, Literal, Optional
 
@@ -58,6 +60,19 @@ MAX_KEY_POINTS = 8
 MAX_ONLY_ONE_SOURCE = 8
 CLUSTER_SIMILARITY_THRESHOLD = 0.35
 CLUSTER_MIN_KEYWORDS = 3
+
+# A search fans out over sources in parallel, but within a source the fetches
+# are serial and each waits out that host's crawl-delay, so a source with many
+# feeds can run for a long time. Without a bound the request simply hangs and
+# the user cannot tell a slow search from a broken one. Past the budget a
+# source stops fetching and reports what it already has.
+SEARCH_BUDGET_SECONDS = 60.0
+# A fetch already in flight cannot be interrupted, so allow it to land.
+SEARCH_GRACE_SECONDS = 15.0
+
+
+def _past(deadline: float) -> bool:
+    return time.monotonic() >= deadline
 
 
 @app.get("/")
@@ -185,9 +200,11 @@ def _site_result(site: dict, status: str, reason: Optional[str], docs: list) -> 
     return {"site_id": site["id"], "name": site["name"], "status": status, "reason": reason, "docs": docs}
 
 
-def _crawl_search_site(site: dict, query: str) -> dict:
+def _crawl_search_site(site: dict, query: str, deadline: float) -> dict:
     if not site.get("search_page_url") or not site.get("param_name"):
         return _site_result(site, "skipped", "Site is missing its search configuration", [])
+    if _past(deadline):
+        return _site_result(site, "timeout", "Search budget ran out before this source started", [])
     search_url = build_search_url(site["search_page_url"], site["param_name"], query)
 
     entry = crawler.fetch_and_extract(search_url)
@@ -200,8 +217,12 @@ def _crawl_search_site(site: dict, query: str) -> dict:
         docs.append({"url": search_url, "title": entry.title or site["name"], "published": entry.published, "text": entry.text})
 
     followed = 0
+    truncated = False
     for link in entry.links:
         if followed >= FOLLOW_LINKS_PER_SITE:
+            break
+        if _past(deadline):
+            truncated = True
             break
         result = crawler.fetch_and_extract(link, same_domain_only_from=search_url)
         if result.ok and len(result.text) > 200:
@@ -209,11 +230,15 @@ def _crawl_search_site(site: dict, query: str) -> dict:
             followed += 1
 
     if not docs:
+        if truncated:
+            return _site_result(site, "timeout", "Search budget ran out before anything was retrieved", [])
         return _site_result(site, "empty", "No extractable text found", [])
+    if truncated:
+        return _site_result(site, "partial", "Stopped early: the search budget ran out", docs)
     return _site_result(site, "ok", None, docs)
 
 
-def _crawl_rss_site(site: dict, query_ast) -> dict:
+def _crawl_rss_site(site: dict, query_ast, deadline: float) -> dict:
     feed_configs = site.get("feeds") or []
     if not feed_configs:
         return _site_result(site, "skipped", "No feeds configured for this source", [])
@@ -221,7 +246,14 @@ def _crawl_rss_site(site: dict, query_ast) -> dict:
     all_items = []
     seen_links = set()
     fetch_errors = []
+    truncated = False
     for feed_cfg in feed_configs:
+        # Checked per feed rather than per source: a source with fifteen feeds
+        # is exactly the case the budget exists for, and stopping between feeds
+        # keeps whatever the earlier ones returned.
+        if _past(deadline):
+            truncated = True
+            break
         feed = crawler.fetch_feed(feed_cfg["feed_url"])
         if not feed.ok:
             reason = "Blocked by robots.txt" if feed.blocked_by_robots else (feed.error or "Fetch failed")
@@ -235,6 +267,8 @@ def _crawl_rss_site(site: dict, query_ast) -> dict:
             all_items.append((item, feed_cfg["feed_url"]))
 
     if not all_items:
+        if truncated:
+            return _site_result(site, "timeout", "Search budget ran out before any feed was read", [])
         reason = "All feeds failed: " + "; ".join(fetch_errors) if fetch_errors else "No feed items available"
         return _site_result(site, "skipped", reason, [])
 
@@ -252,6 +286,9 @@ def _crawl_rss_site(site: dict, query_ast) -> dict:
 
     docs = []
     for _, item, feed_url in top_items:
+        if _past(deadline):
+            truncated = True
+            break
         text = ""
         title = item.title
         published = item.published
@@ -272,24 +309,28 @@ def _crawl_rss_site(site: dict, query_ast) -> dict:
             docs.append({"url": item.link or feed_url, "title": title or item.title, "published": published, "text": text})
 
     if not docs:
+        if truncated:
+            return _site_result(site, "timeout", "Search budget ran out before anything was retrieved", [])
         return _site_result(site, "empty", "No extractable text found", [])
+    if truncated:
+        return _site_result(site, "partial", "Stopped early: the search budget ran out", docs)
     return _site_result(site, "ok", None, docs)
 
 
-def _crawl_one_site(site: dict, query: str, query_ast) -> dict:
+def _crawl_one_site(site: dict, query: str, query_ast, deadline: float) -> dict:
     if site["site_type"] == "rss":
-        return _crawl_rss_site(site, query_ast)
+        return _crawl_rss_site(site, query_ast, deadline)
     # Search-type sites get the raw typed query as-is (including any AND/OR/quotes).
     # It's passed straight to that site's own search engine, which may or may not
     # understand boolean syntax; we don't control or rewrite it.
-    return _crawl_search_site(site, query)
+    return _crawl_search_site(site, query, deadline)
 
 
-def _crawl_one_site_safe(site: dict, query: str, query_ast) -> dict:
+def _crawl_one_site_safe(site: dict, query: str, query_ast, deadline: float) -> dict:
     """An unexpected failure in one site's crawl (a bad HTML page, a network edge
     case, anything not already handled) must not take down the whole search."""
     try:
-        return _crawl_one_site(site, query, query_ast)
+        return _crawl_one_site(site, query, query_ast, deadline)
     except Exception as exc:
         return _site_result(site, "skipped", f"Internal error: {exc}", [])
 
@@ -387,11 +428,35 @@ def search(payload: SearchIn):
     if not boolean_search.has_real_term(query_ast):
         raise HTTPException(400, "Enter at least one search term (operators like AND/OR/NOT alone aren't a query).")
 
+    started = time.monotonic()
+    deadline = started + SEARCH_BUDGET_SECONDS
+
     results = []
-    with ThreadPoolExecutor(max_workers=min(8, len(sites))) as executor:
-        futures = {executor.submit(_crawl_one_site_safe, site, payload.query, query_ast): site for site in sites}
-        for future in as_completed(futures):
-            results.append(future.result())
+    reported = set()
+    executor = ThreadPoolExecutor(max_workers=min(8, len(sites)))
+    try:
+        futures = {
+            executor.submit(_crawl_one_site_safe, site, payload.query, query_ast, deadline): site
+            for site in sites
+        }
+        try:
+            # Workers check the deadline between fetches, but one already in
+            # flight can overrun it, so wait a grace period past the budget
+            # rather than indefinitely.
+            for future in as_completed(futures, timeout=SEARCH_BUDGET_SECONDS + SEARCH_GRACE_SECONDS):
+                result = future.result()
+                results.append(result)
+                reported.add(result["site_id"])
+        except FuturesTimeoutError:
+            pass
+    finally:
+        # Do not block on stragglers. Anything that has not reported is reported
+        # as timed out, and its thread is left to wind down on its own.
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    for site in sites:
+        if site["id"] not in reported:
+            results.append(_site_result(site, "timeout", "Search budget ran out before this source finished", []))
 
     order = {s["id"]: i for i, s in enumerate(sites)}
     results.sort(key=lambda r: order.get(r["site_id"], 0))
@@ -402,7 +467,9 @@ def search(payload: SearchIn):
     seen_urls = set()
 
     for r in results:
-        if r["status"] != "ok":
+        # Keyed on whether anything was retrieved, not on the status label, so a
+        # source cut short by the deadline still contributes what it did gather.
+        if not r["docs"]:
             continue
         joined_text = "\n".join(d["text"] for d in r["docs"])
         differences.append({"site_id": r["site_id"], "name": r["name"], "summary": summarize(joined_text, max_sentences=SITE_SUMMARY_SENTENCES)})
@@ -431,12 +498,13 @@ def search(payload: SearchIn):
     key_points = key_points[:MAX_KEY_POINTS]
     only_one_source = only_one_source[:MAX_ONLY_ONE_SOURCE]
 
-    sites_ok = sum(1 for r in results if r["status"] == "ok")
-    overview = _build_overview(all_claims, sites_ok)
+    sites_with_content = sum(1 for r in results if r["docs"])
+    overview = _build_overview(all_claims, sites_with_content)
 
     citations.sort(key=lambda c: c["published"] or "", reverse=True)
 
     site_statuses = [{"site_id": r["site_id"], "name": r["name"], "status": r["status"], "reason": r["reason"]} for r in results]
+    cut_short = [r for r in results if r["status"] in ("timeout", "partial")]
 
     return {
         "query": payload.query,
@@ -448,8 +516,11 @@ def search(payload: SearchIn):
         "site_statuses": site_statuses,
         "stats": {
             "sites_searched": len(sites),
-            "sites_with_results": sites_ok,
+            "sites_with_results": sites_with_content,
             "articles_found": len(citations),
             "key_points": len(key_points),
+            "elapsed_seconds": round(time.monotonic() - started, 1),
+            "budget_seconds": SEARCH_BUDGET_SECONDS,
+            "cut_short": len(cut_short),
         },
     }

@@ -399,7 +399,7 @@ function renderReport(data) {
 
   let html = `<div class="report">
     <h2 class="title">${escapeHtml(data.query)}: Multi-Source Summary</h2>
-    <div class="stats">${s.sites_searched} source(s) searched &middot; ${s.articles_found} article(s) found &middot; ${s.key_points} corroborated point(s)</div>`;
+    <div class="stats">${s.sites_searched} source(s) searched &middot; ${s.articles_found} article(s) found &middot; ${s.key_points} corroborated point(s)${s.elapsed_seconds != null ? ' &middot; ' + s.elapsed_seconds + 's' : ''}${s.cut_short ? ` &middot; <span style="color:var(--danger)">${s.cut_short} source(s) cut short by the ${s.budget_seconds}s budget</span>` : ''}</div>`;
 
   html += `<div class="section"><div class="label">Overview</div>
     <div class="overview-text">${data.overview ? escapeHtml(data.overview) : '<span class="empty-state">Not enough matching content across sources to synthesize an overview.</span>'}</div></div>`;
