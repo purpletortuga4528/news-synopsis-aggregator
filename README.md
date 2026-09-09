@@ -100,7 +100,10 @@ untouched, and it may or may not understand the same operators.
 - **Overview**: a synthesis weighted toward vocabulary that more than one source
   uses. When the sources share no common vocabulary, it says so instead of
   stitching unrelated sentences together and calling it agreement.
-- **Key points**: claims corroborated by two or more sources, tagged with which.
+- **Key points**: claims corroborated by two or more sources. Each shows every
+  source's own sentence rather than one standing in for all of them, because
+  matching is lexical and two sentences can share wording while describing
+  different events. Seeing both is how you tell corroboration from coincidence.
 - **Differences in coverage**: a short summary per source, so divergent framing
   is visible side by side.
 - **Reported by one source**: claims that appeared in a single outlet.
@@ -169,11 +172,16 @@ summarized and discarded within a single request.
   JavaScript will yield nothing.
 - **Summarization is extractive, not abstractive.** It selects sentences; it
   does not write them. Sentences can read as disjointed out of context.
-- **Corroborated Key Points are rare.** They require two sources to report the
-  same thing in similar words. Across six sample queries against the seeded
-  sources, one appeared. Outlets with different editorial focus genuinely do
-  not cover the same stories very often, and only the top few matching items
-  per source are examined.
+- **Corroborated Key Points are rare, and roughly a third are wrong.** Measured
+  over 24 queries against the seeded sources: 8 key points, of which 5 were
+  genuine cross-source corroboration and 3 were lexical coincidence. Expect
+  about one genuine point per five queries. Two causes, neither fixable by
+  tuning: outlets with different editorial focus do not often cover the same
+  story, and bag-of-words matching cannot tell "Trump-backed candidate wins
+  primary" in one state from the same sentence about another, because the
+  disagreement lives in the words the two sentences do not share. This is why
+  each key point shows every source's sentence: read them before believing the
+  pairing.
 - **Stopwords are English only.** Clustering and salience scoring handle text
   in other languages, but common words in those languages are not filtered out,
   so they carry more weight than they should. Two-character terms are also

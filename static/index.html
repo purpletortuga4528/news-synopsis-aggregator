@@ -111,6 +111,9 @@
   ul.bullets { list-style: none; margin: 0; padding: 0; }
   ul.bullets li { padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; line-height: 1.5; }
   ul.bullets li:last-child { border-bottom: none; }
+  /* One line per source inside a key point, so a reader can see whether the
+     sources actually agree rather than taking the pairing on trust. */
+  .account { margin: 0.15rem 0; }
   .tag {
     display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.45rem; border-radius: 999px;
     margin-right: 0.35rem; color: #fff; vertical-align: middle;
@@ -418,10 +421,10 @@ function renderReport(data) {
 
   html += `<div class="section"><div class="label">Key Points</div>`;
   if (data.key_points.length === 0) {
-    html += `<p class="empty-state">No point was corroborated by more than one source.</p>`;
+    html += `<p class="empty-state">No point was corroborated by more than one source. That is common: across 24 sample queries only about one in five produced any.</p>`;
   } else {
     html += `<ul class="bullets">` + data.key_points.map(kp => `
-      <li>${kp.sources.map(name => `<span class="tag" style="background:${siteColorByName(name)}">${escapeHtml(name)}</span>`).join('')}${escapeHtml(kp.sentence)}</li>
+      <li>${(kp.accounts || []).map(a => `<div class="account"><span class="tag" style="background:${siteColorByName(a.site_name)}">${escapeHtml(a.site_name)}</span>${escapeHtml(a.sentence)}</div>`).join('')}</li>
     `).join('') + `</ul>`;
   }
   html += `</div>`;

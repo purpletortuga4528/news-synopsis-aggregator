@@ -57,7 +57,13 @@ CLAIM_SENTENCES_PER_DOC = 2
 OVERVIEW_SENTENCES = 4
 MAX_KEY_POINTS = 8
 MAX_ONLY_ONE_SOURCE = 8
-CLUSTER_SIMILARITY_THRESHOLD = 0.35
+# Calibrated over 24 queries against the seeded sources. At 0.35 the run produced
+# 3 corroborated points of which 2 were genuine; at 0.25, 8 of which 5 were.
+# Precision is flat between the two and recall is 2.5x, so the looser value
+# surfaces more real corroboration without being less reliable. It is not
+# reliable in absolute terms: roughly a third of key points are a lexical
+# coincidence, which is why each one shows every source's own sentence.
+CLUSTER_SIMILARITY_THRESHOLD = 0.25
 CLUSTER_MIN_KEYWORDS = 3
 
 # A search fans out over sources in parallel, but within a source the fetches
@@ -421,6 +427,37 @@ def _build_overview(all_claims: list, sites_with_content: int) -> str:
     return summarize("\n".join(chosen), max_sentences=OVERVIEW_SENTENCES)
 
 
+def _split_clusters(clusters: list):
+    """Partition clusters into corroborated key points and single-source claims.
+
+    A key point carries one account per source rather than a single
+    representative sentence standing in for all of them. Clustering is lexical,
+    so two sentences can match on shape while disagreeing on the subject: a
+    measured example paired "Trump-backed candidate wins primary for New
+    Hampshire district" with the same phrasing about Oklahoma governor. Shown one
+    sentence tagged with two source names, a reader cannot tell corroboration
+    from coincidence. Shown both, the mismatch is obvious and a genuine match
+    reads stronger.
+    """
+    key_points = []
+    only_one_source = []
+    for cluster in clusters:
+        unique_sites = sorted({c["site_name"] for c in cluster})
+        representative = max(cluster, key=lambda c: len(c["_kw"]))
+        entry = {"sentence": representative["sentence"], "url": representative["url"]}
+        if len(unique_sites) >= 2:
+            accounts = []
+            for name in unique_sites:
+                best = max((c for c in cluster if c["site_name"] == name), key=lambda c: len(c["_kw"]))
+                accounts.append({"site_name": name, "sentence": best["sentence"], "url": best["url"]})
+            key_points.append({**entry, "sources": unique_sites, "accounts": accounts})
+        else:
+            only_one_source.append({**entry, "site_name": unique_sites[0]})
+
+    key_points.sort(key=lambda kp: len(kp["sources"]), reverse=True)
+    return key_points[:MAX_KEY_POINTS], only_one_source[:MAX_ONLY_ONE_SOURCE]
+
+
 class SearchIn(BaseModel):
     query: str = Field(min_length=1, max_length=200)
 
@@ -490,20 +527,7 @@ def search(payload: SearchIn):
 
     clusters = _cluster_claims(all_claims)
 
-    key_points = []
-    only_one_source = []
-    for cluster in clusters:
-        unique_sites = sorted({c["site_name"] for c in cluster})
-        representative = max(cluster, key=lambda c: len(c["_kw"]))
-        entry = {"sentence": representative["sentence"], "url": representative["url"]}
-        if len(unique_sites) >= 2:
-            key_points.append({**entry, "sources": unique_sites})
-        else:
-            only_one_source.append({**entry, "site_name": unique_sites[0]})
-
-    key_points.sort(key=lambda kp: len(kp["sources"]), reverse=True)
-    key_points = key_points[:MAX_KEY_POINTS]
-    only_one_source = only_one_source[:MAX_ONLY_ONE_SOURCE]
+    key_points, only_one_source = _split_clusters(clusters)
 
     sites_with_content = sum(1 for r in results if r["docs"])
     overview = _build_overview(all_claims, sites_with_content)
