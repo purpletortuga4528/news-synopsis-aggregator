@@ -20,12 +20,31 @@ STOPWORDS = set(
     """.split()
 )
 
-_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'])")
-_WORD_RE = re.compile(r"[A-Za-z']+")
+# The sentence after a full stop can begin with a capital that is not in A-Z:
+# "Elysee" with an acute E, "Uber" with an umlaut. Without the non-ASCII branch
+# those paragraphs never split at all and the whole thing is treated as one
+# enormous sentence. The branch is deliberately loose (it admits lowercase
+# accented letters too), which can over-split after an abbreviation, but that
+# failure already exists for ASCII ("M. Dupont") and costs far less than not
+# splitting.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"']|[^\x00-\x7F])")
+
+# Unicode-aware, mirroring boolean_search: an [A-Za-z']+ class chops a name
+# with a diacritic into fragments and deletes numbers outright, so a shared
+# year or a recurring non-English name contributes nothing to clustering.
+# [^\W_] is "word character but not underscore". Kept as a local copy rather
+# than imported so this module stays standalone stdlib, like boolean_search.
+_WORD_RE = re.compile(r"[^\W_]+(?:'[^\W_]+)*")
+_APOSTROPHE_RE = re.compile("[\u2019\u02bc]")  # right single quote, modifier apostrophe
+
+
+def _normalize(text: str) -> str:
+    """Fold typographic apostrophes so "don't" written either way is one word."""
+    return _APOSTROPHE_RE.sub("'", text)
 
 
 def _split_sentences(text: str):
-    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", _normalize(text)).strip()
     if not text:
         return []
     sentences = _SENTENCE_SPLIT_RE.split(text)
@@ -35,7 +54,11 @@ def _split_sentences(text: str):
 def keywords(text: str) -> set:
     """Lowercase, stopword-free, len>2 word set. Used both for summarization scoring
     and for cross-source similarity comparison."""
-    return {w.lower() for w in _WORD_RE.findall(text) if len(w) > 2 and w.lower() not in STOPWORDS}
+    return {
+        w.lower()
+        for w in _WORD_RE.findall(_normalize(text))
+        if len(w) > 2 and w.lower() not in STOPWORDS
+    }
 
 
 POSITION_WEIGHT = 0.15  # small lede bias: earlier sentences edge out equally-scored later ones
