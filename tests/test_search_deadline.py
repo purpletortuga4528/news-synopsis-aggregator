@@ -6,15 +6,9 @@ long time. Without a bound the HTTP request simply hangs and a slow search is
 indistinguishable from a broken one. Past the budget a source stops fetching and
 reports whatever it already gathered.
 """
-import pathlib
-import tempfile
 import unittest
 
 try:
-    import db
-    # Point the database at a scratch file before importing app, which calls
-    # init_db() at import time. Tests must not touch the real sites.db.
-    db.DB_PATH = pathlib.Path(tempfile.gettempdir()) / "news_synopsis_deadline_test.db"
     import app
     import boolean_search
     import crawler
