@@ -22,7 +22,7 @@ lifted verbatim from the articles, so nothing in the output is invented.
 
 ## Requirements
 
-Python 3.8 or newer. Developed and tested on 3.12.
+Python 3.9 or newer. Developed and tested on 3.12.
 
 ## Install
 
@@ -123,9 +123,21 @@ that is a robots.txt refusal, a network failure, or no matching items.
   certificate, SNI and Host header all still use the original hostname.
 - Responses are capped at 3 MB.
 
-Because crawl-delays are enforced per host and honoured serially, a search
-across sources with many feeds can take a while. This is the polite behaviour,
-not a bug, but see the limitations below.
+Because crawl-delays are enforced per host and honoured serially, a source with
+many feeds takes a while on its own. That is the polite behaviour, not a bug.
+Two things keep it bounded.
+
+**Caching.** Feeds are cached for 5 minutes and article text for 30 minutes, so
+a second search shortly after the first does not re-download anything. This is
+where the time goes: a measured six-source search spent 104.9s asleep honouring
+crawl-delays against 15.9s of real network I/O. Serving from cache is also the
+politer behaviour, because it makes no request at all. Only successful fetches
+are cached, so a transient failure does not stick.
+
+**A search budget.** A search stops fetching after 60 seconds and reports what
+it has. A source cut short is marked `partial` and still contributes everything
+it gathered; one that got nothing at all is marked `timeout`. Both appear in the
+status line at the bottom of the report, along with the elapsed time.
 
 ## Tests
 
@@ -148,18 +160,20 @@ summarized and discarded within a single request.
 
 ## Known limitations
 
-- **Searches are slow and have no deadline.** Feeds are re-fetched on every
-  search with no caching, and crawl-delays serialize requests to the same host.
-  A source with a dozen feeds can take a minute on its own. There is no
-  server-side timeout and no partial-result path.
-- **Feed descriptions are not stripped of HTML.** When an article page cannot be
-  fetched, the feed's own description is used as the text, and any markup in it
-  can surface as visible tags in a summary.
+- **A first, uncached search is slow.** Crawl-delays serialize requests to the
+  same host, so a source with a dozen feeds takes tens of seconds on its own.
+  Caching and the search budget bound this, but they do not make the first
+  search fast. There is no progress reporting while it runs.
 - **Search-page scraping is best effort.** It follows up to 3 links from a
   results page and extracts text generically. Sites that render results in
   JavaScript will yield nothing.
 - **Summarization is extractive, not abstractive.** It selects sentences; it
   does not write them. Sentences can read as disjointed out of context.
+- **Corroborated Key Points are rare.** They require two sources to report the
+  same thing in similar words. Across six sample queries against the seeded
+  sources, one appeared. Outlets with different editorial focus genuinely do
+  not cover the same stories very often, and only the top few matching items
+  per source are examined.
 - **Stopwords are English only.** Clustering and salience scoring handle text
   in other languages, but common words in those languages are not filtered out,
   so they carry more weight than they should. Two-character terms are also
