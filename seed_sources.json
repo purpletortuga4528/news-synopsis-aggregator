@@ -1,0 +1,73 @@
+[
+  {
+    "name": "The Guardian",
+    "feeds": [
+      "https://www.theguardian.com/international/rss",
+      "https://www.theguardian.com/world/rss",
+      "https://www.theguardian.com/politics/rss",
+      "https://www.theguardian.com/business/rss",
+      "https://www.theguardian.com/technology/rss",
+      "https://www.theguardian.com/environment/rss",
+      "https://www.theguardian.com/science/rss",
+      "https://www.theguardian.com/us-news/rss",
+      "https://www.theguardian.com/uk-news/rss",
+      "https://www.theguardian.com/football/rss",
+      "https://www.theguardian.com/education/rss",
+      "https://www.theguardian.com/society/rss",
+      "https://www.theguardian.com/media/rss"
+    ]
+  },
+  {
+    "name": "Fox News",
+    "feeds": [
+      "https://moxie.foxnews.com/google-publisher/latest.xml",
+      "https://moxie.foxnews.com/google-publisher/politics.xml",
+      "https://moxie.foxnews.com/google-publisher/world.xml",
+      "https://moxie.foxnews.com/google-publisher/us.xml",
+      "https://moxie.foxnews.com/google-publisher/entertainment.xml",
+      "https://moxie.foxnews.com/google-publisher/health.xml",
+      "https://moxie.foxnews.com/google-publisher/science.xml",
+      "https://moxie.foxnews.com/google-publisher/tech.xml",
+      "https://moxie.foxnews.com/google-publisher/opinion.xml",
+      "https://moxie.foxnews.com/google-publisher/sports.xml"
+    ]
+  },
+  {
+    "name": "Al Jazeera",
+    "feeds": [
+      "https://www.aljazeera.com/xml/rss/all.xml"
+    ]
+  },
+  {
+    "name": "BBC",
+    "feeds": [
+      "https://feeds.bbci.co.uk/news/rss.xml",
+      "https://feeds.bbci.co.uk/news/world/rss.xml",
+      "https://feeds.bbci.co.uk/news/uk/rss.xml",
+      "https://feeds.bbci.co.uk/news/business/rss.xml",
+      "https://feeds.bbci.co.uk/news/politics/rss.xml",
+      "https://feeds.bbci.co.uk/news/health/rss.xml",
+      "https://feeds.bbci.co.uk/news/education/rss.xml",
+      "https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",
+      "https://feeds.bbci.co.uk/news/technology/rss.xml",
+      "https://feeds.bbci.co.uk/news/entertainment_and_arts/rss.xml",
+      "https://feeds.bbci.co.uk/news/world/us_and_canada/rss.xml",
+      "https://feeds.bbci.co.uk/news/world/europe/rss.xml",
+      "https://feeds.bbci.co.uk/news/world/middle_east/rss.xml",
+      "https://feeds.bbci.co.uk/news/world/asia/rss.xml",
+      "https://feeds.bbci.co.uk/news/world/africa/rss.xml"
+    ]
+  },
+  {
+    "name": "Politico",
+    "feeds": [
+      "https://rss.politico.com/politics-news.xml",
+      "https://rss.politico.com/healthcare.xml",
+      "https://rss.politico.com/defense.xml",
+      "https://rss.politico.com/energy.xml",
+      "https://rss.politico.com/technology.xml",
+      "https://rss.politico.com/playbook.xml",
+      "https://rss.politico.com/whitehouse.xml"
+    ]
+  }
+]

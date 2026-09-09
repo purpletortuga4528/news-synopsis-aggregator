@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>News Research &amp; Summarizer</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --border: #e3e5ea;
+    --text: #1a1d23;
+    --text-dim: #6b7280;
+    --label: #8a8f98;
+    --accent: #2563eb;
+    --accent-dim: #eef2ff;
+    --danger: #dc2626;
+    --ok: #16a34a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .topbar {
+    background: #14171f;
+    color: #fff;
+    padding: 0.9rem 1.5rem;
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+  }
+  .topbar h1 { font-size: 1.05rem; margin: 0; font-weight: 600; }
+  .topbar .tagline { font-size: 0.8rem; color: #9ca3af; }
+  .layout { display: flex; align-items: flex-start; }
+  .sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    background: var(--panel);
+    border-right: 1px solid var(--border);
+    min-height: calc(100vh - 52px);
+    padding: 1rem;
+  }
+  .sidebar h2 { font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--label); margin: 0 0 0.75rem; }
+  .main { flex: 1; padding: 1.25rem 1.75rem; min-width: 0; }
+
+  .source-card {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 0.6rem 0.7rem;
+    margin-bottom: 0.6rem;
+  }
+  .source-card.disabled { opacity: 0.5; }
+  .source-name { font-weight: 600; font-size: 0.9rem; display: flex; align-items: center; gap: 0.4rem; }
+  .source-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+  .source-url { font-size: 0.72rem; color: var(--text-dim); word-break: break-all; margin: 0.2rem 0 0.5rem; }
+  .feed-toggle { margin: 0.3rem 0 0; background: none; border: none; color: var(--accent); font-size: 0.72rem; padding: 0; cursor: pointer; text-decoration: underline; }
+  .feed-list { margin: 0.3rem 0 0.5rem; }
+  .feed-row { display: flex; align-items: center; justify-content: space-between; gap: 0.4rem; padding: 0.15rem 0; }
+  .feed-url { font-size: 0.72rem; color: var(--text-dim); word-break: break-all; }
+  .feed-row .feed-remove { padding: 0 0.4rem; line-height: 1.3; }
+  .feed-add-row { display: flex; gap: 0.3rem; margin-top: 0.35rem; }
+  .feed-add-input { flex: 1; font-size: 0.72rem; padding: 0.25rem 0.4rem; border: 1px solid var(--border); border-radius: 5px; min-width: 0; }
+  .feed-add-err { font-size: 0.68rem; color: var(--danger); margin-top: 0.2rem; }
+  .source-actions { display: flex; gap: 0.4rem; }
+  .btn-sm {
+    font-size: 0.72rem; padding: 0.25rem 0.6rem; border-radius: 5px; border: 1px solid var(--border);
+    background: #fff; cursor: pointer; color: var(--text);
+  }
+  .btn-sm.on { background: var(--accent-dim); border-color: var(--accent); color: var(--accent); }
+  .btn-sm.danger { color: var(--danger); border-color: #fca5a5; }
+
+  .add-source { margin-top: 1rem; border-top: 1px solid var(--border); padding-top: 1rem; }
+  .add-source label { display: block; font-size: 0.75rem; color: var(--text-dim); margin: 0.5rem 0 0.2rem; }
+  .add-source input[type=text], .add-source input[type=url] {
+    width: 100%; padding: 0.45rem 0.5rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem;
+  }
+  .add-source .tos-row { display: flex; gap: 0.4rem; align-items: flex-start; margin-top: 0.6rem; font-size: 0.72rem; color: var(--text-dim); }
+  .add-source .tos-row input { margin-top: 0.15rem; }
+  .add-source .hint { font-size: 0.72rem; color: var(--accent); margin-top: 0.4rem; }
+  .add-source .err { font-size: 0.72rem; color: var(--danger); margin-top: 0.4rem; }
+  .btn-primary {
+    width: 100%; margin-top: 0.75rem; padding: 0.5rem; border: none; border-radius: 6px;
+    background: var(--accent); color: #fff; font-weight: 600; font-size: 0.85rem; cursor: pointer;
+  }
+  .btn-primary:disabled { opacity: 0.5; cursor: default; }
+
+  .search-row { display: flex; gap: 0.6rem; margin-bottom: 1.25rem; }
+  .search-row input {
+    flex: 1; padding: 0.7rem 0.9rem; border: 1px solid var(--border); border-radius: 8px; font-size: 0.95rem;
+  }
+  .search-row button {
+    padding: 0.7rem 1.5rem; border: none; border-radius: 8px; background: var(--accent); color: #fff;
+    font-weight: 600; cursor: pointer; font-size: 0.9rem;
+  }
+  .search-row button:disabled { opacity: 0.5; cursor: default; }
+
+  .search-hint { font-size: 0.75rem; color: var(--text-dim); margin: -0.75rem 0 0.9rem; }
+  .search-hint code { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.05rem 0.3rem; font-size: 0.72rem; }
+  .status-line { font-size: 0.85rem; color: var(--text-dim); min-height: 1.2rem; margin-bottom: 1rem; }
+  .empty-state { color: var(--text-dim); font-size: 0.9rem; }
+
+  .report h2.title { font-size: 1.3rem; margin: 0 0 0.15rem; }
+  .report .stats { font-size: 0.82rem; color: var(--text-dim); margin-bottom: 1.4rem; }
+  .section { margin-bottom: 1.6rem; }
+  .section .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--label); font-weight: 700; margin-bottom: 0.6rem; }
+  .section .overview-text { font-size: 0.95rem; line-height: 1.6; }
+
+  ul.bullets { list-style: none; margin: 0; padding: 0; }
+  ul.bullets li { padding: 0.5rem 0; border-bottom: 1px solid var(--border); font-size: 0.9rem; line-height: 1.5; }
+  ul.bullets li:last-child { border-bottom: none; }
+  .tag {
+    display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.45rem; border-radius: 999px;
+    margin-right: 0.35rem; color: #fff; vertical-align: middle;
+  }
+
+  .diff-card { border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 6px; padding: 0.65rem 0.8rem; margin-bottom: 0.6rem; }
+  .diff-card .diff-name { font-weight: 700; font-size: 0.85rem; margin-bottom: 0.25rem; }
+  .diff-card .diff-text { font-size: 0.87rem; line-height: 1.5; color: var(--text); }
+
+  .citation { border-left: 3px solid var(--border); padding: 0.4rem 0 0.4rem 0.7rem; margin-bottom: 0.5rem; font-size: 0.85rem; }
+  .citation a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  .citation a:hover { text-decoration: underline; }
+  .citation .meta { color: var(--text-dim); font-size: 0.75rem; margin-top: 0.15rem; }
+
+  .site-statuses { font-size: 0.78rem; color: var(--text-dim); margin-top: 1.5rem; padding-top: 0.8rem; border-top: 1px solid var(--border); }
+  .site-statuses span { margin-right: 1rem; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>News Research &amp; Summarizer</h1>
+  <span class="tagline">One query, multiple sources, one transparent cross-source summary</span>
+</div>
+
+<div class="layout">
+  <div class="sidebar">
+    <h2>News Sources</h2>
+    <div id="site-list"></div>
+
+    <div class="add-source">
+      <h2 style="margin-top:0.5rem;">Add Source</h2>
+      <label for="s-name">Name (optional)</label>
+      <input type="text" id="s-name" placeholder="e.g. Reuters">
+      <label for="s-url">Website URL</label>
+      <input type="url" id="s-url" placeholder="e.g. https://abc.com/search or a feed URL">
+      <div id="s-param-wrap" style="display:none;">
+        <label for="s-param">Search parameter name</label>
+        <input type="text" id="s-param" placeholder="q">
+      </div>
+      <div class="tos-row">
+        <input type="checkbox" id="s-tos">
+        <label for="s-tos">I have reviewed this site's Terms of Service and confirm automated access for personal search/summarization is permitted.</label>
+      </div>
+      <div id="s-hint" class="hint" style="display:none;"></div>
+      <div id="s-err" class="err" style="display:none;"></div>
+      <button class="btn-primary" id="add-btn">+ Add Source</button>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="search-row">
+      <input type="text" id="query" placeholder="e.g. Strait of Hormuz">
+      <button id="search-btn">Search</button>
+    </div>
+    <div class="search-hint">Supports boolean search: <code>AND</code> <code>OR</code> <code>NOT</code>, <code>"exact phrases"</code>, <code>-exclude</code>, and <code>(grouping)</code>. Plain words are combined with AND by default. Example: <code>iran AND (nuclear OR missile) -sanctions</code></div>
+    <div class="status-line" id="status"></div>
+    <div id="report"></div>
+  </div>
+</div>
+
+<script>
+const PALETTE = ['#0d9488', '#dc2626', '#7c3aed', '#059669', '#d97706', '#2563eb', '#db2777', '#4b5563'];
+function colorFor(siteId) {
+  const n = typeof siteId === 'number' ? siteId : [...String(siteId)].reduce((a, c) => a + c.charCodeAt(0), 0);
+  return PALETTE[n % PALETTE.length];
+}
+function escapeHtml(str) {
+  // Explicit character replacement rather than the textContent/innerHTML round-trip
+  // trick: that approach doesn't reliably escape quote characters, which matters
+  // whenever the result is used inside an HTML attribute (e.g. href="...") rather
+  // than as plain text content.
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+function isSafeHttpUrl(url) {
+  return typeof url === 'string' && /^https?:\/\//i.test(url);
+}
+function fmtDate(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toISOString().slice(0, 10);
+}
+
+let sites = [];
+
+async function loadSites() {
+  const res = await fetch('/api/sites');
+  sites = await res.json();
+  renderSites();
+}
+
+const expandedSiteIds = new Set();
+
+function renderSites() {
+  const el = document.getElementById('site-list');
+  if (sites.length === 0) {
+    el.innerHTML = '<p class="empty-state">No sites added yet.</p>';
+    return;
+  }
+  el.innerHTML = '';
+  // Enabled sources float to the top, disabled ones sink below. Recomputed on every
+  // render, so toggling On/Off re-sorts immediately without a page reload.
+  const sorted = [...sites].sort((a, b) => (b.enabled ? 1 : 0) - (a.enabled ? 1 : 0));
+  for (const site of sorted) {
+    const card = document.createElement('div');
+    card.className = 'source-card' + (site.enabled ? '' : ' disabled');
+
+    let detailHtml;
+    let feedToggleHtml = '';
+    if (site.site_type === 'rss') {
+      const feeds = site.feeds || [];
+      const expanded = expandedSiteIds.has(site.id);
+      feedToggleHtml = `<button class="btn-sm feed-toggle" data-id="${site.id}">${expanded ? 'Hide feeds' : 'Show feeds'}</button>`;
+      detailHtml = `<div class="feed-list" style="${expanded ? '' : 'display:none;'}">` + (feeds.length === 0
+        ? `<div class="source-url">No feeds configured</div>`
+        : feeds.map(f => `
+            <div class="feed-row">
+              <span class="feed-url">${escapeHtml(f.label || f.feed_url)}</span>
+              <button class="btn-sm danger feed-remove" data-feed-id="${f.id}">&times;</button>
+            </div>
+          `).join('')) + `
+        <div class="feed-add-row">
+          <input type="url" class="feed-add-input" placeholder="add another feed URL...">
+          <button class="btn-sm feed-add-btn">Add</button>
+        </div>
+        <div class="feed-add-err" style="display:none;"></div>
+      </div>`;
+    } else {
+      detailHtml = `<div class="source-url">${escapeHtml(site.search_page_url)} (param: ${escapeHtml(site.param_name)})</div>`;
+    }
+
+    card.innerHTML = `
+      <div class="source-name"><span class="source-dot" style="background:${colorFor(site.id)}"></span>${escapeHtml(site.name)}
+        <span style="font-weight:400;color:var(--text-dim);font-size:0.7rem;">[${site.site_type}${site.site_type === 'rss' ? ' · ' + (site.feeds || []).length + ' feed' + ((site.feeds || []).length === 1 ? '' : 's') : ''}]</span></div>
+      <div class="source-actions">
+        <button class="btn-sm on-btn ${site.enabled ? 'on' : ''}" data-id="${site.id}">On</button>
+        <button class="btn-sm off-btn ${site.enabled ? '' : 'on'}" data-id="${site.id}">Off</button>
+        <button class="btn-sm danger remove" data-id="${site.id}">Remove</button>
+      </div>
+      ${feedToggleHtml}
+      ${detailHtml}
+    `;
+    const feedToggleBtn = card.querySelector('.feed-toggle');
+    if (feedToggleBtn) {
+      feedToggleBtn.addEventListener('click', () => {
+        if (expandedSiteIds.has(site.id)) expandedSiteIds.delete(site.id);
+        else expandedSiteIds.add(site.id);
+        renderSites();
+      });
+    }
+    card.querySelector('.on-btn').addEventListener('click', () => toggleSite(site.id, true));
+    card.querySelector('.off-btn').addEventListener('click', () => toggleSite(site.id, false));
+    card.querySelector('.remove').addEventListener('click', () => removeSite(site.id));
+    card.querySelectorAll('.feed-remove').forEach(btn => {
+      btn.addEventListener('click', () => removeFeed(btn.dataset.feedId));
+    });
+    const addBtn = card.querySelector('.feed-add-btn');
+    if (addBtn) {
+      addBtn.addEventListener('click', () => addFeed(site.id, card));
+    }
+    el.appendChild(card);
+  }
+}
+
+async function addFeed(siteId, card) {
+  const input = card.querySelector('.feed-add-input');
+  const errEl = card.querySelector('.feed-add-err');
+  const feed_url = input.value.trim();
+  errEl.style.display = 'none';
+  if (!feed_url) return;
+  const res = await fetch(`/api/sites/${siteId}/feeds`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ feed_url })
+  });
+  if (res.ok) {
+    await loadSites();
+    return;
+  }
+  const body = await res.json().catch(() => ({}));
+  errEl.textContent = body.detail || 'Failed to add feed';
+  errEl.style.display = '';
+}
+
+async function removeFeed(feedId) {
+  await fetch(`/api/feeds/${feedId}`, { method: 'DELETE' });
+  await loadSites();
+}
+
+async function toggleSite(id, enabled) {
+  await fetch(`/api/sites/${id}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled })
+  });
+  await loadSites();
+}
+
+async function removeSite(id) {
+  await fetch(`/api/sites/${id}`, { method: 'DELETE' });
+  await loadSites();
+}
+
+document.getElementById('add-btn').addEventListener('click', async () => {
+  const name = document.getElementById('s-name').value.trim();
+  const url = document.getElementById('s-url').value.trim();
+  const param_name = document.getElementById('s-param').value.trim();
+  const tos_ack = document.getElementById('s-tos').checked;
+  const hintEl = document.getElementById('s-hint');
+  const errEl = document.getElementById('s-err');
+  hintEl.style.display = 'none';
+  errEl.style.display = 'none';
+
+  if (!url) { errEl.textContent = 'Enter a URL first.'; errEl.style.display = ''; return; }
+  if (!tos_ack) { errEl.textContent = "Confirm you've reviewed the site's Terms of Service."; errEl.style.display = ''; return; }
+
+  const res = await fetch('/api/sites', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: name || undefined, url, param_name: param_name || undefined, tos_ack })
+  });
+
+  if (res.ok) {
+    document.getElementById('s-name').value = '';
+    document.getElementById('s-url').value = '';
+    document.getElementById('s-param').value = '';
+    document.getElementById('s-param-wrap').style.display = 'none';
+    await loadSites();
+    return;
+  }
+
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 422 && body.detail && body.detail.code === 'NEEDS_PARAM_NAME') {
+    document.getElementById('s-param-wrap').style.display = '';
+    hintEl.textContent = body.detail.message;
+    hintEl.style.display = '';
+  } else {
+    errEl.textContent = (body.detail && body.detail.message) || body.detail || 'Failed to add site';
+    errEl.style.display = '';
+  }
+});
+
+document.getElementById('search-btn').addEventListener('click', runSearch);
+document.getElementById('query').addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
+
+async function runSearch() {
+  const query = document.getElementById('query').value.trim();
+  const statusEl = document.getElementById('status');
+  const reportEl = document.getElementById('report');
+  const btn = document.getElementById('search-btn');
+  if (!query) { alert('Enter a topic first'); return; }
+
+  btn.disabled = true;
+  statusEl.textContent = 'Crawling sources (this respects each site\'s crawl-delay, so it can take a bit)...';
+  reportEl.innerHTML = '';
+
+  try {
+    const res = await fetch('/api/search', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query })
+    });
+    const data = await res.json();
+    btn.disabled = false;
+    if (!res.ok) {
+      statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(data.detail || 'Search failed')}</span>`;
+      return;
+    }
+    statusEl.textContent = '';
+    renderReport(data);
+  } catch (err) {
+    btn.disabled = false;
+    statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String(err))}</span>`;
+  }
+}
+
+function siteColorByName(name) {
+  const site = sites.find(s => s.name === name);
+  return colorFor(site ? site.id : name);
+}
+
+function renderReport(data) {
+  const el = document.getElementById('report');
+  const s = data.stats;
+
+  let html = `<div class="report">
+    <h2 class="title">${escapeHtml(data.query)}: Multi-Source Summary</h2>
+    <div class="stats">${s.sites_searched} source(s) searched &middot; ${s.articles_found} article(s) found &middot; ${s.key_points} corroborated point(s)</div>`;
+
+  html += `<div class="section"><div class="label">Overview</div>
+    <div class="overview-text">${data.overview ? escapeHtml(data.overview) : '<span class="empty-state">Not enough matching content across sources to synthesize an overview.</span>'}</div></div>`;
+
+  html += `<div class="section"><div class="label">Key Points</div>`;
+  if (data.key_points.length === 0) {
+    html += `<p class="empty-state">No point was corroborated by more than one source.</p>`;
+  } else {
+    html += `<ul class="bullets">` + data.key_points.map(kp => `
+      <li>${kp.sources.map(name => `<span class="tag" style="background:${siteColorByName(name)}">${escapeHtml(name)}</span>`).join('')}${escapeHtml(kp.sentence)}</li>
+    `).join('') + `</ul>`;
+  }
+  html += `</div>`;
+
+  html += `<div class="section"><div class="label">Differences in Coverage</div>`;
+  if (data.differences.length === 0) {
+    html += `<p class="empty-state">No sources returned usable content.</p>`;
+  } else {
+    html += data.differences.map(d => `
+      <div class="diff-card" style="border-left-color:${colorFor(d.site_id)}">
+        <div class="diff-name" style="color:${colorFor(d.site_id)}">${escapeHtml(d.name)}</div>
+        <div class="diff-text">${escapeHtml(d.summary)}</div>
+      </div>
+    `).join('');
+  }
+  html += `</div>`;
+
+  if (data.only_one_source.length > 0) {
+    html += `<div class="section"><div class="label">Reported by Only One Source</div>
+      <ul class="bullets">` + data.only_one_source.map(o => `
+        <li><span class="tag" style="background:${siteColorByName(o.site_name)}">${escapeHtml(o.site_name)}</span>${escapeHtml(o.sentence)}</li>
+      `).join('') + `</ul></div>`;
+  }
+
+  html += `<div class="section"><div class="label">Sources / Citations</div>`;
+  if (data.citations.length === 0) {
+    html += `<p class="empty-state">No citable articles were retrieved.</p>`;
+  } else {
+    html += data.citations.map(c => {
+      // The backend already rejects non-http(s) links, but a citation URL still
+      // ends up in an href attribute, so re-check here too before treating it as
+      // a link at all: a broken invariant upstream must not become a clickable
+      // javascript: URI or an attribute-breakout.
+      const titleHtml = escapeHtml(c.title || c.url || '(untitled)');
+      const linkHtml = isSafeHttpUrl(c.url)
+        ? `<a href="${escapeHtml(c.url)}" target="_blank" rel="noopener noreferrer">${titleHtml}</a>`
+        : `<span>${titleHtml}</span>`;
+      return `
+      <div class="citation" style="border-left-color:${siteColorByName(c.site_name)}">
+        ${linkHtml}
+        <div class="meta">${escapeHtml(c.site_name)}${fmtDate(c.published) ? ' &middot; ' + fmtDate(c.published) : ''}</div>
+      </div>
+    `;
+    }).join('');
+  }
+  html += `</div>`;
+
+  const skipped = data.site_statuses.filter(st => st.status !== 'ok');
+  if (skipped.length > 0) {
+    html += `<div class="site-statuses">` + skipped.map(st => `<span>${escapeHtml(st.name)}: ${escapeHtml(st.status)}${st.reason ? ' (' + escapeHtml(st.reason) + ')' : ''}</span>`).join('') + `</div>`;
+  }
+
+  html += `</div>`;
+  el.innerHTML = html;
+}
+
+loadSites();
+</script>
+</body>
+</html>
