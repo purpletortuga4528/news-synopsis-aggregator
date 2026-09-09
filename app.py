@@ -1,11 +1,10 @@
-import re
 import time
 import urllib.parse
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
-from typing import List, Literal, Optional
+from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
@@ -175,6 +174,14 @@ def add_feed(site_id: int, body: FeedIn):
     parsed = urllib.parse.urlparse(body.feed_url)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise HTTPException(400, f"Invalid URL: {body.feed_url}")
+    # Both cheap checks come before the network fetch. Validating a feed over the
+    # network only to answer "no such site" wastes a request and a crawl-delay,
+    # and adding a feed that is already present used to return 200 having done
+    # nothing, which reads as success.
+    if not db.get_site(site_id):
+        raise HTTPException(404, "Site not found")
+    if db.feed_exists(site_id, body.feed_url):
+        raise HTTPException(409, "This source already has that feed.")
     feed = crawler.fetch_feed(body.feed_url)
     if not feed.ok or not feed.items:
         reason = "Blocked by this feed's robots.txt" if feed.blocked_by_robots else (feed.error or "Doesn't look like a valid RSS/Atom feed")
