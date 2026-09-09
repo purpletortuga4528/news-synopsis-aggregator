@@ -126,5 +126,98 @@ class SummarizeTests(unittest.TestCase):
         self.assertLessEqual(len(summarizer.summarize(text, max_sentences=2)), len(text))
 
 
+class AbbreviationTests(unittest.TestCase):
+    """A full stop inside an abbreviation is not a sentence boundary."""
+
+    def test_dotted_initialism_does_not_split(self):
+        text = "Osaka kicked off her 2026 U.S. Open campaign with a win. She advanced."
+        parts = summarizer._split_sentences(text)
+        self.assertEqual(len(parts), 2)
+        self.assertIn("U.S. Open", parts[0])
+
+    def test_title_abbreviation_does_not_split(self):
+        parts = summarizer._split_sentences("Mr. Smith arrived late. The meeting had started.")
+        self.assertEqual(parts, ["Mr. Smith arrived late.", "The meeting had started."])
+
+    def test_ordinary_sentences_still_split(self):
+        parts = summarizer._split_sentences("First one here. Second one here. Third one here.")
+        self.assertEqual(len(parts), 3)
+
+
+class BoilerplateTests(unittest.TestCase):
+    """Page furniture must not be selected as a claim."""
+
+    def test_metadata_lines_are_recognised(self):
+        for line in (
+            "Published 2 hours ago",
+            "Published 6 September 2026",
+            "Last updated: 5 minutes ago",
+            "Updated at 14:32",
+            "3 min read",
+            "Image caption: the scene today",
+            "Advertisement",
+            "Sign up for our daily newsletter",
+        ):
+            with self.subTest(line=line):
+                self.assertTrue(summarizer._is_boilerplate(line))
+
+    def test_real_prose_is_not_discarded(self):
+        # Each of these opens with a word the naive prefix patterns would catch.
+        for line in (
+            "Published research shows a decline in numbers",
+            "Share prices fell sharply on Tuesday morning",
+            "Copyright law changed again this year",
+            "Subscribers to the service will see no change",
+            "The minister updated parliament on the plan",
+            "Updated guidance was issued to schools",
+            "Video evidence was shown to the jury",
+        ):
+            with self.subTest(line=line):
+                self.assertFalse(summarizer._is_boilerplate(line))
+
+    def test_boilerplate_is_never_selected_as_a_summary_sentence(self):
+        text = (
+            "Sign up for our daily newsletter to get the morning briefing in your inbox. "
+            "The council approved the budget after a long debate about school funding. "
+            "Residents welcomed the decision to increase spending on local schools."
+        )
+        picked = summarizer.top_sentences(text, max_sentences=3)
+        # All three sentences clear the word minimum, so without the filter all
+        # three would come back.
+        self.assertEqual(len(picked), 2)
+        self.assertFalse(any(s.startswith("Sign up") for s in picked))
+
+class BlockBoundaryTests(unittest.TestCase):
+    """A newline is a hard sentence boundary, because it came from a separate
+    HTML block element where punctuation is often absent."""
+
+    RUN_ON = (
+        "A man in his 60s and a woman in her 50s died in the crash\n"
+        "Published 9 September 2026, 08:14\n"
+        "Police said the road would stay closed for most of the day."
+    )
+
+    def test_blocks_split_without_punctuation_between_them(self):
+        parts = summarizer._split_sentences(self.RUN_ON)
+        self.assertEqual(len(parts), 3)
+        self.assertEqual(parts[1], "Published 9 September 2026, 08:14")
+
+    def test_byline_glued_to_body_text_no_longer_becomes_a_claim(self):
+        # Joined with a space these were one unsplittable sentence, and no
+        # start-anchored boilerplate filter could reach the byline inside it.
+        picked = summarizer.top_sentences(self.RUN_ON, max_sentences=3)
+        self.assertEqual(len(picked), 2)
+        self.assertFalse(any("Published" in s for s in picked))
+
+    def test_text_without_newlines_behaves_exactly_as_before(self):
+        self.assertEqual(
+            summarizer._split_sentences("First one here. Second one here."),
+            ["First one here.", "Second one here."],
+        )
+
+    def test_abbreviations_still_merge_within_a_block(self):
+        parts = summarizer._split_sentences("Osaka won her U.S. Open match.\nShe plays again on Friday.")
+        self.assertEqual(parts, ["Osaka won her U.S. Open match.", "She plays again on Friday."])
+
 if __name__ == "__main__":
     unittest.main()

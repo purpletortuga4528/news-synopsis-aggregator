@@ -43,12 +43,78 @@ def _normalize(text: str) -> str:
     return _APOSTROPHE_RE.sub("'", text)
 
 
+# A full stop inside an abbreviation looks exactly like a sentence boundary:
+# "Osaka kicked off her 2026 U.S. Open campaign" was being cut after "U.S.",
+# leaving a fragment that carries no fact and pollutes both the summary and the
+# cross-source comparison. Detected after splitting rather than with lookbehind,
+# because Python requires fixed-width lookbehind and these vary in length.
+_ABBREVIATIONS = frozenset(
+    """
+    mr mrs ms dr prof rev fr sr jr st sen rep gov pres gen adm col maj capt lt
+    sgt hon vs etc no inc ltd co corp dept est fig al approx apt ave blvd
+    jan feb mar apr jun jul aug sept sep oct nov dec mon tues tue wed thurs thu
+    fri sat sun
+    """.split()
+)
+# Two or more single-letter-plus-dot runs: U.S., U.K., e.g., i.e., a.m.
+_INITIALISM_RE = re.compile(r"(?:[^\W\d_]\.){2,}$")
+_TRAILING_WORD_RE = re.compile(r"([^\W\d_]+)\.$")
+
+
+def _ends_with_abbreviation(fragment: str) -> bool:
+    fragment = fragment.rstrip()
+    if _INITIALISM_RE.search(fragment):
+        return True
+    match = _TRAILING_WORD_RE.search(fragment)
+    return bool(match) and match.group(1).lower() in _ABBREVIATIONS
+
+
+# Lines a page carries around its article rather than in it. These reach the
+# summarizer as ordinary sentences and were being selected as claims: a synopsis
+# asserting "Published 2 hours ago" is worse than one sentence shorter. Kept
+# deliberately narrow, anchored at the start, so real prose is not discarded.
+_BOILERPLATE_RES = (
+    # "Published" and "Updated" only when an actual date or time follows. A bare
+    # prefix match would discard real prose such as "Published research shows a
+    # decline in numbers".
+    re.compile(r"^published[:\s]+(?:on\s+|at\s+)?\d", re.I),
+    re.compile(r"^(?:last\s+)?updated[:\s]+(?:on\s+|at\s+)?\d", re.I),
+    # Calls to action, as phrases rather than bare words, so a sentence opening
+    # "Share prices fell" or "Copyright law changed" is not thrown away.
+    re.compile(r"^(?:share this|share on|follow us|sign up for|subscribe to"
+               r"|read more|related stories|advertisement|all rights reserved)\b", re.I),
+    re.compile(r"^\d+\s*(?:min|mins|minute|minutes|hour|hours)\s+(?:read|ago)\b", re.I),
+    re.compile(r"^(?:image|photo|picture|video)\s+(?:source|caption|credit)\b", re.I),
+)
+
+
+def _is_boilerplate(sentence: str) -> bool:
+    return any(pattern.search(sentence) for pattern in _BOILERPLATE_RES)
+
+
 def _split_sentences(text: str):
-    text = re.sub(r"\s+", " ", _normalize(text)).strip()
-    if not text:
-        return []
-    sentences = _SENTENCE_SPLIT_RE.split(text)
-    return [s.strip() for s in sentences if s.strip()]
+    """Split into sentences, treating a newline as a hard boundary.
+
+    Newlines arrive from separate HTML block elements. Within a block, ordinary
+    sentence punctuation applies; across blocks there is often no punctuation at
+    all, because a headline, a byline and the first paragraph are simply
+    adjacent. Joining those with a space produced sentences like "...died in the
+    crash Published 9 September 2026", which no start-anchored filter can catch
+    and which read as nonsense in a synopsis.
+    """
+    out = []
+    for block in _normalize(text).split("\n"):
+        block = re.sub(r"\s+", " ", block).strip()
+        if not block:
+            continue
+        merged = []
+        for fragment in _SENTENCE_SPLIT_RE.split(block):
+            if merged and _ends_with_abbreviation(merged[-1]):
+                merged[-1] = merged[-1] + " " + fragment
+            else:
+                merged.append(fragment)
+        out.extend(s.strip() for s in merged if s.strip())
+    return out
 
 
 def keywords(text: str) -> set:
@@ -76,7 +142,7 @@ def _rank_sentences(text: str, min_words_per_sentence: int = 6):
     """Return (sentence, original_index, score, keyword_set) tuples sorted by score,
     descending. Score blends word-frequency salience with a lede bias (earlier
     sentences in a news article tend to carry the actual news)."""
-    sentences = _split_sentences(text)
+    sentences = [s for s in _split_sentences(text) if not _is_boilerplate(s)]
     candidates = [s for s in sentences if len(_WORD_RE.findall(s)) >= min_words_per_sentence]
     if not candidates:
         candidates = sentences

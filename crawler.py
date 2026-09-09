@@ -1,5 +1,6 @@
 import email.utils
 import ipaddress
+import re
 import socket
 import threading
 import time
@@ -362,12 +363,15 @@ def fetch_and_extract(url: str, same_domain_only_from: Optional[str] = None) -> 
         chunk = el.get_text(" ", strip=True)
         if chunk:
             text_parts.append(chunk)
-    page_text = " ".join(text_parts)
+    # Newline, not space: each part is a separate block element, and the
+    # summarizer treats a newline as a hard sentence boundary. Joining with a
+    # space runs a headline straight into a byline straight into body text.
+    page_text = "\n".join(text_parts)
 
     # Some sites put body text in divs/spans rather than p/li (e.g. quote blocks,
     # card layouts). Fall back to whole-page text if the targeted tags yielded little.
     if len(page_text) < 200:
-        whole_text = soup.get_text(" ", strip=True)
+        whole_text = soup.get_text("\n", strip=True)
         if len(whole_text) > len(page_text):
             page_text = whole_text
 
@@ -414,6 +418,22 @@ class FeedResult:
     blocked_by_robots: bool = False
 
 
+_HTML_TAG_RE = re.compile(r"<[a-zA-Z/!][^>]*>")
+
+
+def _strip_html(value: str) -> str:
+    """RSS <description> and <content:encoded> carry HTML by specification.
+    Left as-is it reaches the summarizer as prose, so tags surface as visible
+    text in a synopsis and add junk tokens to keyword extraction. This matters
+    most for a source whose article pages are disallowed by robots.txt, because
+    then the feed description is the only text there is. The cheap tag test
+    first: most titles and many descriptions are plain and need no parser run.
+    """
+    if not value or not _HTML_TAG_RE.search(value):
+        return value
+    return BeautifulSoup(value, "html.parser").get_text(" ", strip=True)
+
+
 def _strip_ns(tag: str) -> str:
     return tag.split("}", 1)[1] if "}" in tag else tag
 
@@ -458,9 +478,9 @@ def fetch_feed(url: str) -> FeedResult:
             for child in entry:
                 name = _strip_ns(child.tag)
                 if name == "title":
-                    title = (child.text or "").strip()
+                    title = _strip_html((child.text or "").strip())
                 elif name in ("description", "encoded"):
-                    description = (child.text or "").strip()
+                    description = _strip_html((child.text or "").strip())
                 elif name == "link":
                     link = (child.text or "").strip()
                 elif name in ("pubDate", "date"):
@@ -476,9 +496,9 @@ def fetch_feed(url: str) -> FeedResult:
             for child in entry:
                 name = _strip_ns(child.tag)
                 if name == "title":
-                    title = (child.text or "").strip()
+                    title = _strip_html((child.text or "").strip())
                 elif name in ("summary", "content"):
-                    description = (child.text or "").strip()
+                    description = _strip_html((child.text or "").strip())
                 elif name == "link":
                     link = child.attrib.get("href", "").strip()
                 elif name in ("published", "updated"):

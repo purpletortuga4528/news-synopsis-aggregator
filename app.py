@@ -262,7 +262,9 @@ def _crawl_rss_site(site: dict, query_ast) -> dict:
                 title = result.title or item.title
                 published = result.published or item.published
         if not text:
-            text = f"{item.title}. {item.description}".strip()
+            # Newline rather than an invented full stop: a headline that does not
+            # end in punctuation is not a sentence we should be fabricating one for.
+            text = f"{item.title}\n{item.description}".strip()
         if text:
             docs.append({"url": item.link or feed_url, "title": title or item.title, "published": published, "text": text})
 
@@ -365,7 +367,7 @@ def _build_overview(all_claims: list, sites_with_content: int) -> str:
 
     if not chosen:
         return no_overlap_msg
-    return summarize(" ".join(chosen), max_sentences=OVERVIEW_SENTENCES)
+    return summarize("\n".join(chosen), max_sentences=OVERVIEW_SENTENCES)
 
 
 class SearchIn(BaseModel):
@@ -399,7 +401,7 @@ def search(payload: SearchIn):
     for r in results:
         if r["status"] != "ok":
             continue
-        joined_text = " ".join(d["text"] for d in r["docs"])
+        joined_text = "\n".join(d["text"] for d in r["docs"])
         differences.append({"site_id": r["site_id"], "name": r["name"], "summary": summarize(joined_text, max_sentences=SITE_SUMMARY_SENTENCES)})
 
         for doc in r["docs"]:
