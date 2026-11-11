@@ -156,6 +156,23 @@ it has. A source cut short is marked `partial` and still contributes everything
 it gathered; one that got nothing at all is marked `timeout`. Both appear in the
 status line at the bottom of the report, along with the elapsed time.
 
+## Dependencies
+
+`requirements.txt` pins direct dependencies to versions with no known
+advisories, checked with `pip-audit`. Transitive dependencies are left to
+resolve, with one exception: `certifi` carries a floor, because it is the CA
+bundle every HTTPS verification depends on and pip will leave an outdated one
+in place whenever a loose constraint upstream is still satisfied.
+
+That exception is a patch, not a guarantee. Because the other transitive
+dependencies float, two installs from the same file can differ, and an
+install months from now may resolve to something unaudited. Worth running
+before trusting an environment:
+
+```bash
+pip-audit -r requirements.txt
+```
+
 ## Tests
 
 ```bash
