@@ -22,7 +22,12 @@ lifted verbatim from the articles, so nothing in the output is invented.
 
 ## Requirements
 
-Python 3.9 or newer. Developed and tested on 3.12.
+Python 3.11 or newer. Developed and tested on 3.12.
+
+The floor is set by the pinned dependencies rather than by the code: the
+security advisories affecting older `starlette` releases are only fixed in
+versions requiring 3.11. Supporting 3.9 would mean shipping known-vulnerable
+packages, which is the worse trade.
 
 ## Install
 
@@ -124,7 +129,16 @@ that is a robots.txt refusal, a network failure, or no matching items.
   refused, and the validated address is pinned for the connection so a second
   DNS answer cannot redirect it somewhere internal. TLS is unaffected: the
   certificate, SNI and Host header all still use the original hostname.
-- Responses are capped at 3 MB.
+- Response bodies are capped at 3 MB of **decoded** data, and abandoned if they
+  take longer than 30 seconds. Counting decoded bytes is the point: a limit on
+  what is read off the socket bounds the compressed size instead, and a 51 KB
+  gzip payload was measured decoding to 52 MB straight through a 3 MB cap.
+- `robots.txt` has its own 512 KB cap. It is the first request made to any new
+  host, so it is bounded before anything else trusts that host, and an
+  oversized or stalled one fails closed exactly like an unreachable one.
+- The request timeout is per socket operation, so each body also carries a
+  total wall-clock bound. Without it a server trickling one byte per read
+  holds a connection open indefinitely without ever tripping the timeout.
 
 Because crawl-delays are enforced per host and honoured serially, a source with
 many feeds takes a while on its own. That is the polite behaviour, not a bug.
