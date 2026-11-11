@@ -219,5 +219,46 @@ class BlockBoundaryTests(unittest.TestCase):
         parts = summarizer._split_sentences("Osaka won her U.S. Open match.\nShe plays again on Friday.")
         self.assertEqual(parts, ["Osaka won her U.S. Open match.", "She plays again on Friday."])
 
+class AbbreviationBoundTests(unittest.TestCase):
+    """Only the tail of a fragment can hold an abbreviation, and the check is
+    bounded to it. Unbounded, both regexes rescan from every start position,
+    which is quadratic on one unbroken run of letters: 40,000 characters was
+    measured at 14 seconds, and page text is attacker-influenced."""
+
+    def test_a_very_long_token_is_handled_quickly(self):
+        import time
+        blob = "a" * 200_000
+        start = time.perf_counter()
+        summarizer._ends_with_abbreviation(blob)
+        elapsed = time.perf_counter() - start
+        self.assertLess(elapsed, 0.5, f"took {elapsed:.1f}s; the bound has regressed")
+
+    def test_a_long_run_of_dotted_letters_is_handled_quickly(self):
+        import time
+        start = time.perf_counter()
+        summarizer._ends_with_abbreviation("a." * 100_000)
+        self.assertLess(time.perf_counter() - start, 0.5)
+
+    def test_bounding_does_not_change_the_answer(self):
+        for fragment, expected in [
+            ("Osaka kicked off her 2026 U.S.", True),
+            ("Mr.", True),
+            ("He spoke to Dr.", True),
+            ("That ended the sentence.", False),
+            ("No trailing dot here", False),
+            ("", False),
+        ]:
+            with self.subTest(fragment=fragment):
+                self.assertEqual(summarizer._ends_with_abbreviation(fragment), expected)
+
+    def test_a_long_prefix_does_not_hide_a_trailing_abbreviation(self):
+        # The window is a tail slice, so preceding text must not matter.
+        self.assertTrue(summarizer._ends_with_abbreviation("x" * 5000 + " U.S."))
+        self.assertFalse(summarizer._ends_with_abbreviation("x" * 5000 + " done."))
+
+    def test_a_word_longer_than_the_window_is_not_an_abbreviation(self):
+        # Truncated by the window, it cannot match the short-abbreviation list.
+        self.assertFalse(summarizer._ends_with_abbreviation("a" * 200 + "."))
+
 if __name__ == "__main__":
     unittest.main()

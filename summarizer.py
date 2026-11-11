@@ -61,11 +61,18 @@ _INITIALISM_RE = re.compile(r"(?:[^\W\d_]\.){2,}$")
 _TRAILING_WORD_RE = re.compile(r"([^\W\d_]+)\.$")
 
 
+# An abbreviation can only sit at the very end, so only the tail is examined.
+# The bound matters: both regexes below are scanned from every start position,
+# which is quadratic on one unbroken run of letters. A 40,000-character token
+# was measured taking 14 seconds, and page text is attacker-influenced.
+_ABBREV_TAIL_CHARS = 40
+
+
 def _ends_with_abbreviation(fragment: str) -> bool:
-    fragment = fragment.rstrip()
-    if _INITIALISM_RE.search(fragment):
+    tail = fragment.rstrip()[-_ABBREV_TAIL_CHARS:]
+    if _INITIALISM_RE.search(tail):
         return True
-    match = _TRAILING_WORD_RE.search(fragment)
+    match = _TRAILING_WORD_RE.search(tail)
     return bool(match) and match.group(1).lower() in _ABBREVIATIONS
 
 

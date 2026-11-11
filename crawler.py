@@ -268,6 +268,53 @@ def _safe_get(url: str, headers: dict, timeout: float, stream: bool = False,
     return None, "Too many redirects"
 
 
+# robots.txt is a short text file. Half a megabyte is already absurd, and this
+# is the FIRST request made to any new host, so it must be bounded before
+# anything else trusts that host.
+MAX_ROBOTS_BYTES = 512_000
+# requests' `timeout` is per socket operation, not a total. A server trickling
+# one byte per read keeps a connection open indefinitely without ever tripping
+# it, so the whole body gets its own wall-clock bound.
+BODY_READ_TIMEOUT = 30.0
+
+
+def _read_capped(resp, limit: int, max_seconds: float = BODY_READ_TIMEOUT):
+    """Read a response body, abandoning it if it grows past `limit` decoded
+    bytes or takes longer than `max_seconds`. Returns (content, error).
+
+    The limit counts DECODED bytes deliberately: resp.raw.read(amt) bounds the
+    compressed input instead, and a 51 KB gzip payload was measured decoding to
+    52 MB straight through a 3 MB cap. iter_content also translates urllib3
+    errors into requests exceptions, which reading resp.raw does not.
+    """
+    deadline = time.monotonic() + max_seconds
+    chunks = []
+    total = 0
+    for chunk in resp.iter_content(chunk_size=65536):
+        if not chunk:
+            continue
+        total += len(chunk)
+        if total > limit:
+            return None, f"Response exceeds the {limit} byte limit"
+        if time.monotonic() > deadline:
+            return None, f"Response body took longer than {max_seconds:g}s"
+        chunks.append(chunk)
+    return b"".join(chunks), None
+
+
+def _robots_host(parsed) -> str:
+    """The netloc with any userinfo removed. robots.txt must not be fetched with
+    credentials embedded in the URL, and the robots and crawl-delay caches should
+    key on the real host so http://user@example.com and http://example.com are
+    not treated as two different sites."""
+    host = parsed.hostname or ""
+    if ":" in host:          # IPv6 literal needs its brackets back
+        host = f"[{host}]"
+    if parsed.port:
+        host = f"{host}:{parsed.port}"
+    return host
+
+
 def _get_robot_parser(domain: str, scheme: str) -> urllib.robotparser.RobotFileParser:
     with _robots_lock:
         cached = _robots_cache.get(domain)
@@ -276,18 +323,29 @@ def _get_robot_parser(domain: str, scheme: str) -> urllib.robotparser.RobotFileP
 
     rp = urllib.robotparser.RobotFileParser()
     robots_url = f"{scheme}://{domain}/robots.txt"
-    resp, _err = _safe_get(robots_url, headers={"User-Agent": USER_AGENT}, timeout=REQUEST_TIMEOUT)
+    resp, _err = _safe_get(robots_url, headers={"User-Agent": USER_AGENT},
+                           timeout=REQUEST_TIMEOUT, stream=True)
     if resp is None:
         # If robots.txt is unreachable (or blocked as unsafe), fail closed: do not crawl.
         rp.disallow_all = True
     else:
-        if resp.status_code in (401, 403):
+        try:
+            if resp.status_code in (401, 403):
+                rp.disallow_all = True
+            elif resp.status_code >= 400:
+                rp.allow_all = True
+            else:
+                body, err = _read_capped(resp, MAX_ROBOTS_BYTES)
+                if body is None:
+                    # An oversized or stalled robots.txt is not a licence to
+                    # crawl: fail closed, the same as an unreachable one.
+                    rp.disallow_all = True
+                else:
+                    rp.parse(body.decode("utf-8", "replace").splitlines())
+        except requests.RequestException:
             rp.disallow_all = True
-        elif resp.status_code >= 400:
-            rp.allow_all = True
-        else:
-            rp.parse(resp.text.splitlines())
-        resp.close()
+        finally:
+            resp.close()
 
     with _robots_lock:
         _robots_cache[domain] = (rp, time.time())
@@ -296,13 +354,13 @@ def _get_robot_parser(domain: str, scheme: str) -> urllib.robotparser.RobotFileP
 
 def is_allowed(url: str) -> bool:
     parsed = urllib.parse.urlparse(url)
-    rp = _get_robot_parser(parsed.netloc, parsed.scheme or "https")
+    rp = _get_robot_parser(_robots_host(parsed), parsed.scheme or "https")
     return rp.can_fetch(USER_AGENT, url)
 
 
 def _crawl_delay_for(url: str) -> float:
     parsed = urllib.parse.urlparse(url)
-    rp = _get_robot_parser(parsed.netloc, parsed.scheme or "https")
+    rp = _get_robot_parser(_robots_host(parsed), parsed.scheme or "https")
     delay = rp.crawl_delay(USER_AGENT)
     if delay is not None:
         return max(float(delay), 0.5)
@@ -314,7 +372,7 @@ def _crawl_delay_for(url: str) -> float:
 
 def _polite_wait(url: str):
     parsed = urllib.parse.urlparse(url)
-    domain = parsed.netloc
+    domain = _robots_host(parsed)
     delay = _crawl_delay_for(url)
     lock = _domain_lock(domain)
     with lock:
@@ -415,12 +473,15 @@ def _fetch_raw(url: str, accept: str = "text/html") -> RawFetch:
         blocked = bool(err) and err.startswith(ROBOTS_BLOCKED_ERROR)
         return RawFetch(ok=False, error=err, blocked_by_robots=blocked)
     try:
-        content = resp.raw.read(MAX_CONTENT_BYTES, decode_content=True)
+        content, size_err = _read_capped(resp, MAX_CONTENT_BYTES)
         resp.close()
+        if content is None:
+            return RawFetch(ok=False, error=size_err)
         if resp.status_code >= 400:
             return RawFetch(ok=False, error=f"HTTP {resp.status_code}")
         return RawFetch(ok=True, content=content, content_type=resp.headers.get("Content-Type", ""))
     except requests.RequestException as exc:
+        resp.close()
         return RawFetch(ok=False, error=str(exc))
 
 

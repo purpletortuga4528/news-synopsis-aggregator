@@ -39,7 +39,8 @@ def _hostname_only(netloc: str) -> str:
 @app.middleware("http")
 async def restrict_to_localhost(request: Request, call_next):
     host_header = request.headers.get("host", "")
-    if _hostname_only(host_header) not in _LOCAL_HOSTNAMES:
+    # Host is case-insensitive per RFC 9110, so fold before comparing.
+    if _hostname_only(host_header).lower() not in _LOCAL_HOSTNAMES:
         return JSONResponse({"detail": "Forbidden"}, status_code=403)
     origin = request.headers.get("origin")
     if origin:
@@ -91,7 +92,7 @@ def index():
 
 class SiteIn(BaseModel):
     name: Optional[str] = Field(default=None, max_length=100)
-    url: str
+    url: str = Field(max_length=2048)
     param_name: Optional[str] = Field(default=None, max_length=50)
     tos_ack: bool
 
@@ -171,8 +172,8 @@ def remove_site(site_id: int):
 
 
 class FeedIn(BaseModel):
-    feed_url: str
-    label: Optional[str] = None
+    feed_url: str = Field(max_length=2048)
+    label: Optional[str] = Field(default=None, max_length=100)
 
 
 @app.post("/api/sites/{site_id}/feeds")
