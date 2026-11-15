@@ -218,10 +218,41 @@ function fmtDate(iso) {
 
 let sites = [];
 
+function showSourceError(msg) {
+  const el = document.getElementById('s-err');
+  el.textContent = msg;
+  el.style.display = '';
+}
+
 async function loadSites() {
-  const res = await fetch('/api/sites');
-  sites = await res.json();
+  // Without this guard a failed request threw inside an async handler, leaving
+  // an empty panel and no indication that anything had gone wrong.
+  try {
+    const res = await fetch('/api/sites');
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    sites = await res.json();
+  } catch (err) {
+    document.getElementById('site-list').innerHTML =
+      '<p class="empty-state">Could not load sources. Is the server still running?</p>';
+    return;
+  }
   renderSites();
+}
+
+async function mutate(url, options, failMessage) {
+  // These calls used to ignore their response entirely. The reload afterwards
+  // meant the display self-corrected, so a rejected change looked briefly like
+  // it had worked and then silently undid itself.
+  try {
+    const res = await fetch(url, options);
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      showSourceError(detailText(body.detail, failMessage));
+    }
+  } catch (err) {
+    showSourceError(`${failMessage}: ${String(err)}`);
+  }
+  await loadSites();
 }
 
 const expandedSiteIds = new Set();
@@ -316,20 +347,24 @@ async function addFeed(siteId, card) {
 }
 
 async function removeFeed(feedId) {
-  await fetch(`/api/feeds/${feedId}`, { method: 'DELETE' });
-  await loadSites();
+  await mutate(`/api/feeds/${feedId}`, { method: 'DELETE' }, 'Could not remove that feed');
 }
 
 async function toggleSite(id, enabled) {
-  await fetch(`/api/sites/${id}`, {
+  await mutate(`/api/sites/${id}`, {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled })
-  });
-  await loadSites();
+  }, 'Could not change that source');
 }
 
 async function removeSite(id) {
-  await fetch(`/api/sites/${id}`, { method: 'DELETE' });
-  await loadSites();
+  // Removing a source cascades to every feed under it and cannot be undone, so
+  // it is the one action here worth asking about.
+  const site = sites.find(s => s.id === id);
+  const label = site ? site.name : 'this source';
+  const feeds = site && site.feeds ? site.feeds.length : 0;
+  const extra = feeds ? ` and its ${feeds} feed${feeds === 1 ? '' : 's'}` : '';
+  if (!confirm(`Remove ${label}${extra}? This cannot be undone.`)) return;
+  await mutate(`/api/sites/${id}`, { method: 'DELETE' }, 'Could not remove that source');
 }
 
 document.getElementById('add-btn').addEventListener('click', async () => {
