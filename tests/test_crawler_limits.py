@@ -232,5 +232,64 @@ class BodyReadTimeoutTests(unittest.TestCase):
         self.assertEqual(content, b"abcdef")
         self.assertIsNone(err)
 
+@unittest.skipUnless(DEPS_AVAILABLE, "requires the third-party dependencies")
+class RobotsRefusalReasonTests(unittest.TestCase):
+    """Failing closed is right either way, but the reported reason must be true.
+    Saying a publisher disallowed the crawl when the file merely could not be
+    read asserts a refusal that never happened."""
+
+    def setUp(self):
+        self._safe_get = crawler._safe_get
+        self._ssrf = crawler._is_ssrf_safe
+        self._wait = crawler._polite_wait
+        crawler._is_ssrf_safe = lambda url: True
+        crawler._polite_wait = lambda url: None
+        crawler._robots_cache.clear()
+
+    def tearDown(self):
+        crawler._safe_get = self._safe_get
+        crawler._is_ssrf_safe = self._ssrf
+        crawler._polite_wait = self._wait
+        crawler._robots_cache.clear()
+
+    def test_a_real_disallow_is_reported_as_one(self):
+        crawler._safe_get = lambda *a, **k: (_FakeResponse([b"User-agent: *\nDisallow: /\n"]), None)
+        result = crawler._fetch_raw("https://disallow.test/page")
+        self.assertFalse(result.ok)
+        self.assertTrue(result.blocked_by_robots)
+        self.assertEqual(result.error, crawler.ROBOTS_BLOCKED_ERROR)
+
+    def test_an_unreachable_robots_is_not_called_a_disallow(self):
+        crawler._safe_get = lambda *a, **k: (None, "connection refused")
+        result = crawler._fetch_raw("https://unreachable.test/page")
+        self.assertFalse(result.ok)
+        self.assertFalse(result.blocked_by_robots, "this was not a publisher refusal")
+        self.assertEqual(result.error, crawler.ROBOTS_UNREADABLE_ERROR)
+
+    def test_an_oversized_robots_is_not_called_a_disallow(self):
+        crawler._safe_get = lambda *a, **k: (_FakeResponse([b"#" + b"a" * 100_000] * 20), None)
+        result = crawler._fetch_raw("https://huge.test/page")
+        self.assertFalse(result.ok)
+        self.assertFalse(result.blocked_by_robots)
+        self.assertEqual(result.error, crawler.ROBOTS_UNREADABLE_ERROR)
+
+    def test_401_is_treated_as_a_refusal_not_a_failure(self):
+        # Withholding the file is a deliberate server decision, so it is
+        # reported as a refusal rather than as an error on our side.
+        crawler._safe_get = lambda *a, **k: (_FakeResponse([b"denied"], status=401), None)
+        result = crawler._fetch_raw("https://authwall.test/page")
+        self.assertFalse(result.ok)
+        self.assertTrue(result.blocked_by_robots)
+
+    def test_a_site_with_no_robots_file_is_crawlable(self):
+        calls = []
+        crawler._safe_get = lambda url, **k: (
+            _FakeResponse([b"not found"], status=404) if url.endswith("robots.txt")
+            else (calls.append(url) or _FakeResponse([b"<html>body</html>"]))
+        , None)
+        result = crawler._fetch_raw("https://norobots.test/page")
+        self.assertTrue(result.ok)
+        self.assertEqual(result.content, b"<html>body</html>")
+
 if __name__ == "__main__":
     unittest.main()

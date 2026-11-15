@@ -94,6 +94,10 @@ MAX_REDIRECTS = 5
 # Prefix marker so a caller can tell a robots.txt refusal apart from a generic
 # network error without the two paths having to return different shapes.
 ROBOTS_BLOCKED_ERROR = "Disallowed by robots.txt"
+# Failing closed is right either way, but saying the wrong thing about why is
+# not: reporting "disallowed" when the file simply could not be read tells the
+# user the publisher refused them when no such refusal happened.
+ROBOTS_UNREADABLE_ERROR = "Could not read this site's robots.txt, so the crawl was not attempted"
 
 # Fetched content is cached so a second search within a few minutes does not
 # re-download the same feeds. This is where the time actually goes: a measured
@@ -104,43 +108,80 @@ ROBOTS_BLOCKED_ERROR = "Disallowed by robots.txt"
 FEED_CACHE_TTL = 300.0     # feeds turn over in minutes, not seconds
 PAGE_CACHE_TTL = 1800.0    # an article's text does not change once published
 MAX_CACHE_ENTRIES = 512
+# A count alone is not a bound. 512 entries of up to MAX_CONTENT_BYTES each can
+# reach 1.4 GB resident, and 200 entries of 1 MB were measured holding 191 MB
+# without the eviction policy firing once. The byte budget is the real limit;
+# the entry count just keeps the eviction scan short.
+MAX_CACHE_BYTES = 64 * 1024 * 1024
 
 _content_cache: dict = {}
+_content_cache_bytes = 0
 _content_cache_lock = threading.Lock()
 
 
+def _entry_size(value) -> int:
+    """Rough resident size of a cached value. Exact accounting is not the point;
+    having any byte-denominated budget at all is."""
+    if isinstance(value, FetchResult):
+        return len(value.text) + len(value.title) + sum(len(link) for link in value.links)
+    if isinstance(value, FeedResult):
+        return sum(len(i.title) + len(i.description) + len(i.link) for i in value.items)
+    return 0
+
+
 def _cache_get(key):
+    global _content_cache_bytes
     with _content_cache_lock:
         entry = _content_cache.get(key)
         if entry is None:
             return None
-        expires_at, value = entry
+        expires_at, value, size = entry
         if time.monotonic() >= expires_at:
             del _content_cache[key]
+            _content_cache_bytes -= size
             return None
         return value
 
 
 def _cache_put(key, value, ttl: float):
+    global _content_cache_bytes
+    size = _entry_size(value)
+    if size > MAX_CACHE_BYTES:
+        # Caching this would mean evicting everything else for one item.
+        return
     with _content_cache_lock:
-        if len(_content_cache) >= MAX_CACHE_ENTRIES and key not in _content_cache:
-            # Evict whatever expires soonest. Within one kind the TTL is uniform,
-            # so that is the least recently fetched entry.
+        existing = _content_cache.pop(key, None)
+        if existing is not None:
+            _content_cache_bytes -= existing[2]
+        # Evict whatever expires soonest until both budgets fit. Within one kind
+        # the TTL is uniform, so that is the least recently fetched entry.
+        while _content_cache and (
+            len(_content_cache) >= MAX_CACHE_ENTRIES
+            or _content_cache_bytes + size > MAX_CACHE_BYTES
+        ):
             soonest = min(_content_cache, key=lambda k: _content_cache[k][0])
-            del _content_cache[soonest]
-        _content_cache[key] = (time.monotonic() + ttl, value)
+            _content_cache_bytes -= _content_cache.pop(soonest)[2]
+        _content_cache[key] = (time.monotonic() + ttl, value, size)
+        _content_cache_bytes += size
 
 
 def clear_cache():
     """Drop every cached feed and page. For tests, and for anyone who wants the
     next search to go to the network unconditionally."""
+    global _content_cache_bytes
     with _content_cache_lock:
         _content_cache.clear()
+        _content_cache_bytes = 0
 
 
 def cache_stats() -> dict:
     with _content_cache_lock:
-        return {"entries": len(_content_cache), "capacity": MAX_CACHE_ENTRIES}
+        return {
+            "entries": len(_content_cache),
+            "capacity": MAX_CACHE_ENTRIES,
+            "bytes": _content_cache_bytes,
+            "byte_capacity": MAX_CACHE_BYTES,
+        }
 
 
 _robots_cache: dict = {}
@@ -323,27 +364,34 @@ def _get_robot_parser(domain: str, scheme: str) -> urllib.robotparser.RobotFileP
 
     rp = urllib.robotparser.RobotFileParser()
     robots_url = f"{scheme}://{domain}/robots.txt"
+    # Distinguishes "the publisher disallowed this" from "we could not read the
+    # file". Both fail closed; only the reported reason differs.
+    rp.unreadable = False
     resp, _err = _safe_get(robots_url, headers={"User-Agent": USER_AGENT},
                            timeout=REQUEST_TIMEOUT, stream=True)
     if resp is None:
-        # If robots.txt is unreachable (or blocked as unsafe), fail closed: do not crawl.
+        # Unreachable (or refused as unsafe): fail closed, do not crawl.
         rp.disallow_all = True
+        rp.unreadable = True
     else:
         try:
             if resp.status_code in (401, 403):
+                # A deliberate server decision to withhold the file. Closer to a
+                # refusal than to a failure, so it is reported as one.
                 rp.disallow_all = True
             elif resp.status_code >= 400:
                 rp.allow_all = True
             else:
-                body, err = _read_capped(resp, MAX_ROBOTS_BYTES)
+                body, _size_err = _read_capped(resp, MAX_ROBOTS_BYTES)
                 if body is None:
-                    # An oversized or stalled robots.txt is not a licence to
-                    # crawl: fail closed, the same as an unreachable one.
+                    # Oversized or stalled: not a licence to crawl.
                     rp.disallow_all = True
+                    rp.unreadable = True
                 else:
                     rp.parse(body.decode("utf-8", "replace").splitlines())
         except requests.RequestException:
             rp.disallow_all = True
+            rp.unreadable = True
         finally:
             resp.close()
 
@@ -356,6 +404,15 @@ def is_allowed(url: str) -> bool:
     parsed = urllib.parse.urlparse(url)
     rp = _get_robot_parser(_robots_host(parsed), parsed.scheme or "https")
     return rp.can_fetch(USER_AGENT, url)
+
+
+def robots_was_unreadable(url: str) -> bool:
+    """True when the refusal came from not being able to read robots.txt rather
+    than from anything the file said. The parser is already cached, so this adds
+    no request."""
+    parsed = urllib.parse.urlparse(url)
+    rp = _get_robot_parser(_robots_host(parsed), parsed.scheme or "https")
+    return getattr(rp, "unreadable", False)
 
 
 def _crawl_delay_for(url: str) -> float:
@@ -458,6 +515,8 @@ def _fetch_raw(url: str, accept: str = "text/html") -> RawFetch:
     if not _is_ssrf_safe(url):
         return RawFetch(ok=False, error="Blocked: URL resolves to a non-public address")
     if not is_allowed(url):
+        if robots_was_unreadable(url):
+            return RawFetch(ok=False, error=ROBOTS_UNREADABLE_ERROR)
         return RawFetch(ok=False, blocked_by_robots=True, error=ROBOTS_BLOCKED_ERROR)
 
     _polite_wait(url)
@@ -474,15 +533,17 @@ def _fetch_raw(url: str, accept: str = "text/html") -> RawFetch:
         return RawFetch(ok=False, error=err, blocked_by_robots=blocked)
     try:
         content, size_err = _read_capped(resp, MAX_CONTENT_BYTES)
-        resp.close()
         if content is None:
             return RawFetch(ok=False, error=size_err)
         if resp.status_code >= 400:
             return RawFetch(ok=False, error=f"HTTP {resp.status_code}")
         return RawFetch(ok=True, content=content, content_type=resp.headers.get("Content-Type", ""))
     except requests.RequestException as exc:
-        resp.close()
         return RawFetch(ok=False, error=str(exc))
+    finally:
+        # finally, not a close() on each branch: anything unexpected escaping
+        # the read must not leak the connection either.
+        resp.close()
 
 
 def _fetch_and_extract_uncached(url: str, same_domain_only_from: Optional[str] = None) -> FetchResult:

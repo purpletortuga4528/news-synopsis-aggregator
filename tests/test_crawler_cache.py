@@ -109,5 +109,74 @@ class ContentCacheTests(unittest.TestCase):
         self.assertEqual(len(pages), 2)
 
 
+@unittest.skipUnless(DEPS_AVAILABLE, "requires the third-party dependencies")
+class CacheByteBudgetTests(unittest.TestCase):
+    """An entry count is not a bound. 512 entries of up to MAX_CONTENT_BYTES
+    each can reach 1.4 GB, and 200 entries of 1 MB were measured holding 191 MB
+    without eviction firing once."""
+
+    def setUp(self):
+        crawler.clear_cache()
+
+    def tearDown(self):
+        crawler.clear_cache()
+
+    @staticmethod
+    def _page(i, size):
+        return crawler.FetchResult(url=f"https://e{i}.test/a", ok=True, text="x" * size)
+
+    def test_the_cache_stays_within_its_byte_budget(self):
+        for i in range(200):
+            crawler._cache_put(("page", f"u{i}", None), self._page(i, 1_000_000), 300.0)
+        stats = crawler.cache_stats()
+        self.assertLessEqual(stats["bytes"], crawler.MAX_CACHE_BYTES)
+        self.assertLess(stats["entries"], 200, "nothing was evicted")
+
+    def test_eviction_fires_on_bytes_before_the_entry_cap(self):
+        # Entry count stays far below MAX_CACHE_ENTRIES, so only a byte budget
+        # can trigger eviction here.
+        for i in range(120):
+            crawler._cache_put(("page", f"u{i}", None), self._page(i, 1_000_000), 300.0)
+        self.assertLess(crawler.cache_stats()["entries"], crawler.MAX_CACHE_ENTRIES)
+        self.assertLessEqual(crawler.cache_stats()["bytes"], crawler.MAX_CACHE_BYTES)
+
+    def test_small_entries_are_not_evicted_unnecessarily(self):
+        for i in range(50):
+            crawler._cache_put(("page", f"u{i}", None), self._page(i, 1000), 300.0)
+        self.assertEqual(crawler.cache_stats()["entries"], 50)
+
+    def test_an_entry_larger_than_the_whole_budget_is_not_cached(self):
+        # It must not evict everything else to make room for one item.
+        crawler._cache_put(("page", "small", None), self._page(0, 1000), 300.0)
+        crawler._cache_put(("page", "huge", None), self._page(1, crawler.MAX_CACHE_BYTES + 1), 300.0)
+        self.assertIsNone(crawler._cache_get(("page", "huge", None)))
+        self.assertIsNotNone(crawler._cache_get(("page", "small", None)))
+
+    def test_replacing_a_key_does_not_double_count_its_bytes(self):
+        key = ("page", "same", None)
+        crawler._cache_put(key, self._page(0, 500_000), 300.0)
+        first = crawler.cache_stats()["bytes"]
+        crawler._cache_put(key, self._page(0, 500_000), 300.0)
+        self.assertEqual(crawler.cache_stats()["bytes"], first)
+        self.assertEqual(crawler.cache_stats()["entries"], 1)
+
+    def test_expiry_releases_the_bytes_it_was_holding(self):
+        crawler._cache_put(("page", "gone", None), self._page(0, 500_000), -1.0)
+        self.assertIsNone(crawler._cache_get(("page", "gone", None)))
+        self.assertEqual(crawler.cache_stats()["bytes"], 0)
+
+    def test_clear_cache_resets_the_byte_count(self):
+        crawler._cache_put(("page", "a", None), self._page(0, 500_000), 300.0)
+        crawler.clear_cache()
+        self.assertEqual(crawler.cache_stats()["bytes"], 0)
+        self.assertEqual(crawler.cache_stats()["entries"], 0)
+
+    def test_feed_results_are_measured_too(self):
+        feed = crawler.FeedResult(ok=True, items=[
+            crawler.FeedItem("t" * 100, "d" * 1000, "https://x.test/a") for _ in range(10)
+        ])
+        crawler._cache_put(("feed", "f", None), feed, 300.0)
+        self.assertGreater(crawler.cache_stats()["bytes"], 10_000)
+
 if __name__ == "__main__":
     unittest.main()

@@ -120,8 +120,11 @@ that is a robots.txt refusal, a network failure, or no matching items.
 ## Crawling behaviour
 
 - `robots.txt` is honoured for every host, on the initial URL and on every
-  redirect hop. An unreachable or 401/403 `robots.txt` fails closed: the crawl
-  does not proceed.
+  redirect hop. An unreachable, oversized or 401/403 `robots.txt` fails closed:
+  the crawl does not proceed. The report distinguishes the two cases, because
+  they are not the same fact: a source the publisher disallowed is reported as
+  disallowed, while one whose `robots.txt` simply could not be read says so
+  instead of attributing a refusal nobody made.
 - Crawl-delay and request-rate directives are respected, defaulting to 2 seconds
   between requests to the same host when a site specifies nothing.
 - Redirects are followed manually, up to 5 hops, so each hop is revalidated.
