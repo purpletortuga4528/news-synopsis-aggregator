@@ -188,7 +188,7 @@ def top_sentences(text: str, max_sentences: int = 3, min_words_per_sentence: int
 
     picked = []
     picked_kw = []
-    for sentence, idx, score, kw in ranked:
+    for sentence, idx, _score, kw in ranked:
         if any(_jaccard(kw, other) >= DEDUP_JACCARD_THRESHOLD for other in picked_kw):
             continue
         picked.append((sentence, idx))

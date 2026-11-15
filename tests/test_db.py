@@ -83,13 +83,6 @@ class DatabaseTests(unittest.TestCase):
     def test_set_enabled_on_a_missing_site_returns_none(self):
         self.assertIsNone(db.set_enabled(9999, True))
 
-    def test_get_sites_by_ids(self):
-        a = db.add_site("A", "rss", tos_ack=True)
-        b = db.add_site("B", "rss", tos_ack=True)
-        found = db.get_sites_by_ids([a["id"], b["id"]])
-        self.assertEqual({s["name"] for s in found}, {"A", "B"})
-        self.assertEqual(db.get_sites_by_ids([]), [])
-
     def test_connection_is_released_when_a_call_raises(self):
         # Every db function wraps its connection in closing(). Without that, an
         # exception between get_conn() and close() leaks the handle. On Windows

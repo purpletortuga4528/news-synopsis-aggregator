@@ -116,15 +116,6 @@ def delete_site(site_id: int) -> bool:
         return cur.rowcount > 0
 
 
-def get_sites_by_ids(site_ids: list) -> list:
-    if not site_ids:
-        return []
-    with closing(get_conn()) as conn:
-        placeholders = ",".join("?" for _ in site_ids)
-        rows = conn.execute(f"SELECT * FROM sites WHERE id IN ({placeholders})", site_ids).fetchall()
-        return [dict(r) for r in rows]
-
-
 def list_enabled_sites() -> list:
     with closing(get_conn()) as conn:
         sites = [dict(r) for r in conn.execute("SELECT * FROM sites WHERE enabled = 1 ORDER BY id").fetchall()]

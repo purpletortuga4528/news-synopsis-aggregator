@@ -415,7 +415,7 @@ def _build_overview(all_claims: list, sites_with_content: int) -> str:
 
     chosen = []
     per_site_count = Counter()
-    for score, c in scored:
+    for _score, c in scored:
         if per_site_count[c["site_name"]] >= MAX_OVERVIEW_PER_SITE:
             continue
         chosen.append(c["sentence"])
@@ -523,8 +523,10 @@ def search(payload: SearchIn):
             if doc["url"] not in seen_urls:
                 seen_urls.add(doc["url"])
                 citations.append({"site_name": r["name"], "url": doc["url"], "title": doc["title"], "published": doc["published"]})
-            for sentence in top_sentences(doc["text"], max_sentences=CLAIM_SENTENCES_PER_DOC):
-                all_claims.append({"sentence": sentence, "site_name": r["name"], "site_id": r["site_id"], "url": doc["url"]})
+            all_claims.extend(
+                {"sentence": sentence, "site_name": r["name"], "site_id": r["site_id"], "url": doc["url"]}
+                for sentence in top_sentences(doc["text"], max_sentences=CLAIM_SENTENCES_PER_DOC)
+            )
 
     clusters = _cluster_claims(all_claims)
 
