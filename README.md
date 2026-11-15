@@ -226,6 +226,14 @@ summarized and discarded within a single request.
   excluded from clustering, so `EU` groups nothing even though it is
   searchable.
 - **No authentication.** The localhost restriction is the only access control.
+- **Searches do not run well in parallel.** Crawl-delay is enforced per host
+  across the whole process, which is the correct behaviour (six searches must
+  not mean six times the request rate at the BBC), but it means concurrent
+  searches queue behind one another and tend to exhaust their budgets. Six at
+  once were measured returning 1 to 13 articles each instead of 23, with most
+  sources marked `partial` or `timeout`. Nothing breaks and the server stays
+  healthy; the reports are just thinner. The UI disables the search button
+  while a search runs, so this needs several tabs to provoke.
 
 ## License
 
