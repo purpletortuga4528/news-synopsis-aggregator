@@ -20,3 +20,7 @@ defusedxml==0.7.1
 # carries PYSEC-2026-4320, after an otherwise clean upgrade. A floor rather
 # than a pin, because a CA bundle should keep moving forward.
 certifi>=2026.10.18
+# soupsieve is beautifulsoup4's CSS selector engine, and the same floating
+# problem reached it: an environment was found on 2.9.2 carrying three
+# advisories while beautifulsoup4's own constraint was still satisfied.
+soupsieve>=4.0.0

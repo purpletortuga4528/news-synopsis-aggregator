@@ -148,7 +148,9 @@ many feeds takes a while on its own. That is the polite behaviour, not a bug.
 Two things keep it bounded.
 
 **Caching.** Feeds are cached for 5 minutes and article text for 30 minutes, so
-a second search shortly after the first does not re-download anything. This is
+a second search shortly after the first does not re-download anything. The cache
+is bounded at 64 MB rather than by a count of entries, because a count is not a
+bound: 512 entries of a 3 MB body each would reach 1.4 GB. This is
 where the time goes: a measured six-source search spent 104.9s asleep honouring
 crawl-delays against 15.9s of real network I/O. Serving from cache is also the
 politer behaviour, because it makes no request at all. Only successful fetches
@@ -163,9 +165,11 @@ status line at the bottom of the report, along with the elapsed time.
 
 `requirements.txt` pins direct dependencies to versions with no known
 advisories, checked with `pip-audit`. Transitive dependencies are left to
-resolve, with one exception: `certifi` carries a floor, because it is the CA
-bundle every HTTPS verification depends on and pip will leave an outdated one
-in place whenever a loose constraint upstream is still satisfied.
+resolve, with two exceptions that carry floors: `certifi`, the CA bundle every
+HTTPS verification depends on, and `soupsieve`, the CSS selector engine
+beautifulsoup4 parses with. Both were found outdated and carrying advisories
+in an otherwise clean environment, because pip leaves an installed package
+alone whenever a loose constraint upstream is still satisfied.
 
 That exception is a patch, not a guarantee. Because the other transitive
 dependencies float, two installs from the same file can differ, and an
