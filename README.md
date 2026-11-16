@@ -161,6 +161,19 @@ it has. A source cut short is marked `partial` and still contributes everything
 it gathered; one that got nothing at all is marked `timeout`. Both appear in the
 status line at the bottom of the report, along with the elapsed time.
 
+## Continuous checks
+
+`.github/workflows/checks.yml` runs the suite on 3.11 and 3.12, a bare-checkout
+run to confirm the stdlib-only modules still import with nothing installed,
+`bandit` and `ruff`, and `pip-audit` against `requirements.txt`.
+
+The audit also runs weekly on a schedule, which is the part that matters. A
+clean audit decays without anything in the repository changing: `soupsieve`
+went from no known advisories to three in three days. A check that only ran on
+push would not have noticed.
+
+The workflow requests `contents: read` and nothing else.
+
 ## Dependencies
 
 `requirements.txt` pins direct dependencies to versions with no known

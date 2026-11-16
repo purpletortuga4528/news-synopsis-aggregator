@@ -1,0 +1,78 @@
+name: checks
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    # Weekly, because a clean audit decays on its own. soupsieve went from no
+    # known advisories to three in three days with nothing in this repository
+    # changing, so a check that only runs on push would have missed it.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+# Read-only by default. Nothing here needs to write to the repository.
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.11 is the floor the pinned dependencies set; 3.12 is what this was
+        # developed on. Testing both stops the floor from quietly drifting.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the suite
+        run: python -m unittest discover -v
+
+      - name: Run the suite with no dependencies installed
+        # The stdlib-only modules must stay importable on a bare checkout, which
+        # is what the skip-guards in the test files exist to protect.
+        run: |
+          python -m venv /tmp/bare
+          /tmp/bare/bin/python -m unittest discover
+
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install pip-audit
+        run: pip install pip-audit
+
+      - name: Audit the pinned set as a fresh clone would resolve it
+        # Deliberately not an installed environment: this is the install a
+        # stranger gets from this repository, which is the one that matters.
+        run: pip-audit -r requirements.txt --progress-spinner off
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install linters
+        run: pip install bandit ruff
+
+      - name: Security lint
+        run: bandit -q -r . --exclude ./venv,./.git
+
+      - name: Correctness lint
+        run: ruff check --select=E9,F,B,S,A,C4,RET,PIE --ignore=S101 *.py tests/*.py
