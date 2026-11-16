@@ -1,3 +1,4 @@
+import json
 import time
 import urllib.parse
 from collections import Counter
@@ -6,8 +7,8 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -463,25 +464,27 @@ class SearchIn(BaseModel):
     query: str = Field(min_length=1, max_length=200)
 
 
-@app.post("/api/search")
-def search(payload: SearchIn):
+def _prepare_search(query: str):
+    """Validation shared by both search entry points."""
     sites = db.list_enabled_sites()
     if not sites:
         raise HTTPException(400, "No enabled sites to search. Toggle at least one site on.")
-
-    query_ast = boolean_search.parse_query(payload.query)
+    query_ast = boolean_search.parse_query(query)
     if not boolean_search.has_real_term(query_ast):
-        raise HTTPException(400, "Enter at least one search term (operators like AND/OR/NOT alone aren't a query).")
+        raise HTTPException(400, "Enter at least one search term (operators like AND/OR/NOT aren't a query).")
+    return sites, query_ast
 
-    started = time.monotonic()
-    deadline = started + SEARCH_BUDGET_SECONDS
 
-    results = []
+def _crawl_sites(sites: list, query: str, query_ast, deadline: float):
+    """Yield each source's result as it lands rather than collecting them all
+    first, so a caller can report progress while the crawl is still running.
+    Sources that have not reported by the grace deadline are yielded last, as
+    timeouts."""
     reported = set()
     executor = ThreadPoolExecutor(max_workers=min(8, len(sites)))
     try:
         futures = {
-            executor.submit(_crawl_one_site_safe, site, payload.query, query_ast, deadline): site
+            executor.submit(_crawl_one_site_safe, site, query, query_ast, deadline): site
             for site in sites
         }
         try:
@@ -490,21 +493,23 @@ def search(payload: SearchIn):
             # rather than indefinitely.
             for future in as_completed(futures, timeout=SEARCH_BUDGET_SECONDS + SEARCH_GRACE_SECONDS):
                 result = future.result()
-                results.append(result)
                 reported.add(result["site_id"])
+                yield result
         except FuturesTimeoutError:
             pass
     finally:
-        # Do not block on stragglers. Anything that has not reported is reported
-        # as timed out, and its thread is left to wind down on its own.
+        # Do not block on stragglers. Their own deadline checks wind them down
+        # within one in-flight fetch.
         executor.shutdown(wait=False, cancel_futures=True)
 
     for site in sites:
         if site["id"] not in reported:
-            results.append(_site_result(site, "timeout", "Search budget ran out before this source finished", []))
+            yield _site_result(site, "timeout", "Search budget ran out before this source finished", [])
 
+
+def _build_report(query: str, sites: list, results: list, started: float) -> dict:
     order = {s["id"]: i for i, s in enumerate(sites)}
-    results.sort(key=lambda r: order.get(r["site_id"], 0))
+    results = sorted(results, key=lambda r: order.get(r["site_id"], 0))
 
     differences = []
     all_claims = []
@@ -528,26 +533,19 @@ def search(payload: SearchIn):
                 for sentence in top_sentences(doc["text"], max_sentences=CLAIM_SENTENCES_PER_DOC)
             )
 
-    clusters = _cluster_claims(all_claims)
-
-    key_points, only_one_source = _split_clusters(clusters)
-
+    key_points, only_one_source = _split_clusters(_cluster_claims(all_claims))
     sites_with_content = sum(1 for r in results if r["docs"])
     overview = _build_overview(all_claims, sites_with_content)
-
     citations.sort(key=lambda c: c["published"] or "", reverse=True)
 
-    site_statuses = [{"site_id": r["site_id"], "name": r["name"], "status": r["status"], "reason": r["reason"]} for r in results]
-    cut_short = [r for r in results if r["status"] in ("timeout", "partial")]
-
     return {
-        "query": payload.query,
+        "query": query,
         "overview": overview,
         "key_points": key_points,
         "differences": differences,
         "only_one_source": only_one_source,
         "citations": citations,
-        "site_statuses": site_statuses,
+        "site_statuses": [{"site_id": r["site_id"], "name": r["name"], "status": r["status"], "reason": r["reason"]} for r in results],
         "stats": {
             "sites_searched": len(sites),
             "sites_with_results": sites_with_content,
@@ -555,6 +553,66 @@ def search(payload: SearchIn):
             "key_points": len(key_points),
             "elapsed_seconds": round(time.monotonic() - started, 1),
             "budget_seconds": SEARCH_BUDGET_SECONDS,
-            "cut_short": len(cut_short),
+            "cut_short": sum(1 for r in results if r["status"] in ("timeout", "partial")),
         },
     }
+
+
+@app.post("/api/search")
+def search(payload: SearchIn):
+    sites, query_ast = _prepare_search(payload.query)
+    started = time.monotonic()
+    results = list(_crawl_sites(sites, payload.query, query_ast, started + SEARCH_BUDGET_SECONDS))
+    return _build_report(payload.query, sites, results, started)
+
+
+def _sse(event: str, data) -> str:
+    return "event: " + event + "\ndata: " + json.dumps(data) + "\n\n"
+
+
+@app.get("/api/search/stream")
+def search_stream(q: str = Query(min_length=1, max_length=200)):
+    """The same search, reported source by source as it happens.
+
+    A cold search takes most of a minute, nearly all of it spent waiting out
+    other people's crawl-delays, and the blocking endpoint gives no sign of life
+    until the whole thing finishes. That is indistinguishable from a hang.
+    """
+    def events():
+        # A validation failure is sent as an event rather than raised, because
+        # EventSource cannot read the body of an HTTP error: the browser would
+        # only ever see "something went wrong".
+        try:
+            sites, query_ast = _prepare_search(q)
+        except HTTPException as exc:
+            yield _sse("error", {"detail": exc.detail})
+            return
+
+        started = time.monotonic()
+        yield _sse("start", {
+            "sources": [{"site_id": s["id"], "name": s["name"]} for s in sites],
+            "budget_seconds": SEARCH_BUDGET_SECONDS,
+        })
+
+        results = []
+        for result in _crawl_sites(sites, q, query_ast, started + SEARCH_BUDGET_SECONDS):
+            results.append(result)
+            yield _sse("source", {
+                "site_id": result["site_id"],
+                "name": result["name"],
+                "status": result["status"],
+                "reason": result["reason"],
+                "documents": len(result["docs"]),
+                "done": len(results),
+                "total": len(sites),
+                "elapsed_seconds": round(time.monotonic() - started, 1),
+            })
+
+        yield _sse("report", _build_report(q, sites, results, started))
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        # No buffering: anything holding these back defeats the point.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

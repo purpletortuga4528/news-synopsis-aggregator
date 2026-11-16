@@ -114,6 +114,9 @@
   /* One line per source inside a key point, so a reader can see whether the
      sources actually agree rather than taking the pairing on trust. */
   .account { margin: 0.15rem 0; }
+  .progress-head { font-weight: 600; font-size: 0.9rem; }
+  .progress-note { font-size: 0.78rem; color: var(--text-dim); margin: 0.15rem 0 0.5rem; }
+  .progress-row { font-size: 0.85rem; margin: 0.15rem 0; }
   .tag {
     display: inline-block; font-size: 0.68rem; font-weight: 700; padding: 0.1rem 0.45rem; border-radius: 999px;
     margin-right: 0.35rem; color: #fff; vertical-align: middle;
@@ -409,33 +412,94 @@ document.getElementById('add-btn').addEventListener('click', async () => {
 document.getElementById('search-btn').addEventListener('click', runSearch);
 document.getElementById('query').addEventListener('keydown', (e) => { if (e.key === 'Enter') runSearch(); });
 
-async function runSearch() {
+let activeSearch = null;
+let searchTicker = null;
+
+function runSearch() {
   const query = document.getElementById('query').value.trim();
   const statusEl = document.getElementById('status');
   const reportEl = document.getElementById('report');
   const btn = document.getElementById('search-btn');
   if (!query) { alert('Enter a topic first'); return; }
 
+  // A second search while one is in flight would otherwise leave the first
+  // stream open and both writing into the same status area.
+  if (activeSearch) { activeSearch.close(); activeSearch = null; }
+  if (searchTicker) { clearInterval(searchTicker); searchTicker = null; }
+
   btn.disabled = true;
-  statusEl.textContent = 'Crawling sources (this respects each site\'s crawl-delay, so it can take a bit)...';
   reportEl.innerHTML = '';
 
-  try {
-    const res = await fetch('/api/search', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ query })
-    });
-    const data = await res.json();
+  let expected = [];
+  const completed = [];
+  const startedAt = Date.now();
+
+  const paint = () => {
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    const rows = completed.map(d => {
+      const note = d.documents > 0
+        ? `${d.documents} article${d.documents === 1 ? '' : 's'}`
+        : (d.reason || d.status);
+      const dim = d.documents > 0 ? '' : ' style="color:var(--text-dim)"';
+      return `<div class="progress-row"><span class="tag" style="background:${siteColorByName(d.name)}">${escapeHtml(d.name)}</span><span${dim}>${escapeHtml(note)}</span></div>`;
+    }).join('');
+    const waiting = expected.filter(n => !completed.some(c => c.name === n));
+    const waitingHtml = waiting.length
+      ? `<div class="progress-row" style="color:var(--text-dim)">still crawling: ${escapeHtml(waiting.join(', '))}</div>`
+      : '';
+    const total = expected.length || '?';
+    statusEl.innerHTML =
+      `<div class="progress-head">Searching ${completed.length}/${total} sources &middot; ${elapsed}s</div>`
+      + `<div class="progress-note">Each site's crawl-delay is honoured, so a first search takes about a minute. Cached ones are near-instant.</div>`
+      + rows + waitingHtml;
+  };
+
+  const finish = () => {
+    if (activeSearch) { activeSearch.close(); activeSearch = null; }
+    if (searchTicker) { clearInterval(searchTicker); searchTicker = null; }
     btn.disabled = false;
-    if (!res.ok) {
-      statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(detailText(data.detail, 'Search failed'))}</span>`;
-      return;
-    }
+  };
+
+  const fail = (msg) => {
+    finish();
+    statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(msg)}</span>`;
+  };
+
+  const es = new EventSource(`/api/search/stream?q=${encodeURIComponent(query)}`);
+  activeSearch = es;
+  searchTicker = setInterval(paint, 1000);
+  paint();
+
+  es.addEventListener('start', (ev) => {
+    expected = JSON.parse(ev.data).sources.map(s => s.name);
+    paint();
+  });
+
+  es.addEventListener('source', (ev) => {
+    completed.push(JSON.parse(ev.data));
+    paint();
+  });
+
+  es.addEventListener('report', (ev) => {
+    // Closed here, before the server's stream ends. EventSource reconnects
+    // automatically on a dropped connection, which would silently start the
+    // whole search again.
+    finish();
     statusEl.textContent = '';
-    renderReport(data);
-  } catch (err) {
-    btn.disabled = false;
-    statusEl.innerHTML = `<span style="color:var(--danger)">${escapeHtml(String(err))}</span>`;
-  }
+    renderReport(JSON.parse(ev.data));
+  });
+
+  es.addEventListener('error', (ev) => {
+    let detail = 'Search failed';
+    try { detail = detailText(JSON.parse(ev.data).detail, detail); } catch (e) { /* not our event */ }
+    fail(detail);
+  });
+
+  es.onerror = () => {
+    // Fires both for a genuine failure and when the server closes the stream.
+    // If the report already arrived, finish() has nulled this out.
+    if (activeSearch) fail('Lost the connection to the server.');
+  };
 }
 
 function siteColorByName(name) {

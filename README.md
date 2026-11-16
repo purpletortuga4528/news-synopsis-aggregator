@@ -100,6 +100,21 @@ score highest. This syntax applies to RSS sources, which are filtered locally.
 Search-page sources get the query string handed to their own search engine
 untouched, and it may or may not understand the same operators.
 
+## Watching a search run
+
+`GET /api/search/stream?q=...` is the same search reported as Server-Sent
+Events: a `start` event naming the sources, a `source` event as each one
+finishes, and a final `report` event carrying the whole thing. The UI uses
+this, so a long crawl shows which sources are done and which it is still
+waiting on.
+
+`POST /api/search` is unchanged and still returns the complete report in one
+response, which is the easier one to script against.
+
+A rejected query comes back as an `error` event with HTTP 200, not as an HTTP
+error, because `EventSource` cannot read the body of an error response and the
+reason would otherwise be lost.
+
 ## Reading the report
 
 - **Overview**: a synthesis weighted toward vocabulary that more than one source
@@ -217,7 +232,9 @@ summarized and discarded within a single request.
 - **A first, uncached search is slow.** Crawl-delays serialize requests to the
   same host, so a source with a dozen feeds takes tens of seconds on its own.
   Caching and the search budget bound this, but they do not make the first
-  search fast. There is no progress reporting while it runs.
+  search fast. The UI reports each source as it finishes rather than waiting
+  in silence, so the wait is visible rather than indistinguishable from a
+  hang: first feedback arrives in about a second against a 40 second search.
 - **Search-page scraping is best effort.** It follows up to 3 links from a
   results page and extracts text generically. Sites that render results in
   JavaScript will yield nothing.
