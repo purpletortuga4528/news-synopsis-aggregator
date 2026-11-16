@@ -57,6 +57,11 @@ _NON_ARTICLE_SEGMENTS = frozenset({
     "preferences",
     # Audio and video platform pages: no article text to extract.
     "sounds", "programmes", "iplayer", "podcast", "podcasts", "player",
+    # Index pages. They list headlines rather than reporting anything, so
+    # their text is navigation: a BBC topic index was measured contributing
+    # 15,000 characters of link text as though it were an article.
+    "search", "topic", "topics", "tag", "tags", "category", "categories",
+    "archive", "index",
 })
 
 

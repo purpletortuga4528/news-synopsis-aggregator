@@ -235,9 +235,17 @@ summarized and discarded within a single request.
   search fast. The UI reports each source as it finishes rather than waiting
   in silence, so the wait is visible rather than indistinguishable from a
   hang: first feedback arrives in about a second against a 40 second search.
-- **Search-page scraping is best effort.** It follows up to 3 links from a
-  results page and extracts text generically. Sites that render results in
-  JavaScript will yield nothing.
+- **Search-page sources mostly do not work, and that is the publishers'
+  decision.** Six real news search pages were tried. Two disallow their search
+  path in `robots.txt` outright and one serves a `robots.txt` that cannot be
+  read, so the crawl is refused before it starts. Of the three that permit it,
+  one returned 403 to this crawler anyway and one 404'd on the URL guessed for
+  it. One worked and produced real articles. Expect this path to be the
+  exception rather than the norm, and prefer RSS, which publishers offer
+  precisely so that automated readers do not need to scrape.
+- **Search-page scraping is best effort where it is permitted.** It follows up
+  to 3 links from a results page and extracts text generically. Sites that
+  render results in JavaScript will yield nothing.
 - **Summarization is extractive, not abstractive.** It selects sentences; it
   does not write them. Sentences can read as disjointed out of context.
 - **Corroborated Key Points are rare, and roughly a third are wrong.** Measured

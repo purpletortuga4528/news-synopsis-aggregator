@@ -227,9 +227,10 @@ def _crawl_search_site(site: dict, query: str, deadline: float) -> dict:
         reason = "Blocked by this site's robots.txt" if entry.blocked_by_robots else (entry.error or "Fetch failed")
         return _site_result(site, "skipped", reason, [])
 
+    # The results page itself is not a document. It lists headlines and
+    # navigation, and adding it contributed claims like "Search the BBC" to the
+    # report. It is a way of finding articles, not one of them.
     docs = []
-    if entry.text.strip():
-        docs.append({"url": search_url, "title": entry.title or site["name"], "published": entry.published, "text": entry.text})
 
     followed = 0
     truncated = False
