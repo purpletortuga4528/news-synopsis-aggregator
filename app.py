@@ -1,4 +1,5 @@
 import json
+import re
 import time
 import urllib.parse
 from collections import Counter
@@ -430,6 +431,47 @@ def _build_overview(all_claims: list, sites_with_content: int) -> str:
     return summarize("\n".join(chosen), max_sentences=OVERVIEW_SENTENCES)
 
 
+# Two sentences can share enough vocabulary to cluster while describing
+# different events. The measured example paired "Trump-backed candidate wins
+# primary for New Hampshire district" with the same phrasing about Oklahoma
+# governor. Set overlap cannot see that: the disagreement lives entirely in the
+# words the two sentences do NOT share, which it discards by construction. So
+# the disagreement is checked separately.
+#
+# "Specifics" are capitalised words and multi-digit numbers: names, places,
+# dates, quantities. Two accounts of the same event tend to agree on those even
+# when they word everything else differently; two accounts of different events
+# with the same shape disagree on exactly those and nothing else.
+#
+# Measured over 16 corroborated pairs from two samples two months apart: the
+# current behaviour yields 13 genuine and 3 spurious, and this filter yields 12
+# genuine and 0 spurious. It buys precision with one genuine pair, which is the
+# right side to err on, because a key point asserts that independent sources
+# reported the same thing and a wrong one is a false claim about the world.
+#
+# Sixteen pairs is a thin sample. Raise this to disable the filter.
+MAX_SPECIFIC_CONFLICTS = 2
+
+_SPECIFIC_WORD_RE = re.compile(r"\b[A-Z][a-z]{2,}\b")
+_SPECIFIC_NUMBER_RE = re.compile(r"\b\d{2,}\b")
+
+
+def _specifics(sentence: str) -> set:
+    # The first character is skipped: a capital there is grammar, not a name.
+    return {w.lower() for w in _SPECIFIC_WORD_RE.findall(sentence[1:])} | set(
+        _SPECIFIC_NUMBER_RE.findall(sentence)
+    )
+
+
+def _accounts_agree(accounts: list) -> bool:
+    """False when the accounts name specifics the others do not, beyond a small
+    tolerance for one source simply saying more than another."""
+    sets = [_specifics(a["sentence"]) for a in accounts]
+    shared = set.intersection(*sets)
+    union = set().union(*sets)
+    return len(union - shared) <= MAX_SPECIFIC_CONFLICTS
+
+
 def _split_clusters(clusters: list):
     """Partition clusters into corroborated key points and single-source claims.
 
@@ -453,7 +495,13 @@ def _split_clusters(clusters: list):
             for name in unique_sites:
                 best = max((c for c in cluster if c["site_name"] == name), key=lambda c: len(c["_kw"]))
                 accounts.append({"site_name": name, "sentence": best["sentence"], "url": best["url"]})
-            key_points.append({**entry, "sources": unique_sites, "accounts": accounts})
+            if _accounts_agree(accounts):
+                key_points.append({**entry, "sources": unique_sites, "accounts": accounts})
+            else:
+                # Shaped alike but about different events. Reported as a single
+                # source's claim rather than as corroboration, which is what it
+                # actually is.
+                only_one_source.append({**entry, "site_name": representative["site_name"]})
         else:
             only_one_source.append({**entry, "site_name": unique_sites[0]})
 

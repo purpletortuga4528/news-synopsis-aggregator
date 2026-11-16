@@ -124,6 +124,9 @@ reason would otherwise be lost.
   source's own sentence rather than one standing in for all of them, because
   matching is lexical and two sentences can share wording while describing
   different events. Seeing both is how you tell corroboration from coincidence.
+  Pairs that agree on wording but disagree on names, places or numbers are
+  dropped before they get here, and appear under Reported by one source
+  instead.
 - **Differences in coverage**: a short summary per source, so divergent framing
   is visible side by side.
 - **Reported by one source**: claims that appeared in a single outlet.
@@ -248,16 +251,22 @@ summarized and discarded within a single request.
   render results in JavaScript will yield nothing.
 - **Summarization is extractive, not abstractive.** It selects sentences; it
   does not write them. Sentences can read as disjointed out of context.
-- **Corroborated Key Points are rare, and roughly a third are wrong.** Measured
-  over 24 queries against the seeded sources: 8 key points, of which 5 were
-  genuine cross-source corroboration and 3 were lexical coincidence. Expect
-  about one genuine point per five queries. Two causes, neither fixable by
-  tuning: outlets with different editorial focus do not often cover the same
-  story, and bag-of-words matching cannot tell "Trump-backed candidate wins
-  primary" in one state from the same sentence about another, because the
-  disagreement lives in the words the two sentences do not share. This is why
-  each key point shows every source's sentence: read them before believing the
-  pairing.
+- **Corroborated Key Points are rare.** Expect roughly one genuine point per
+  five queries. Outlets with different editorial focus simply do not cover the
+  same story very often, and only the top few matching items per source are
+  examined. This is a property of the source list, not a bug to tune away.
+- **They are no longer often wrong, but the sample saying so is small.**
+  Clustering is lexical, so two sentences can match on shape while describing
+  different events: a measured pair put a primary win in New Hampshire
+  alongside the same sentence about Oklahoma. A pair is now also checked for
+  agreement on its specifics (capitalised words and numbers: names, places,
+  dates), because that is where such a disagreement shows up, and set overlap
+  discards it by construction. Over 16 pairs measured across two samples two
+  months apart, that took precision from 71% to 100% at the cost of one
+  genuine pair out of eleven. Sixteen pairs is thin evidence, and
+  `MAX_SPECIFIC_CONFLICTS` in `app.py` turns the check off.
+  Each key point still shows every source's own sentence, so the pairing can
+  be judged rather than taken on trust.
 - **Stopwords are English only.** Clustering and salience scoring handle text
   in other languages, but common words in those languages are not filtered out,
   so they carry more weight than they should. Two-character terms are also

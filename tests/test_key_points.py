@@ -33,20 +33,43 @@ class SplitClustersTests(unittest.TestCase):
         self.assertEqual(accounts[0]["sentence"], "Alpha reported the bridge opened.")
         self.assertEqual(accounts[1]["sentence"], "Beta reported the bridge opened today.")
 
-    def test_a_mismatched_pair_exposes_both_sentences(self):
-        # The measured false positive: same phrasing, different races. The reader
-        # must be able to see this, which a single representative sentence hides.
+    def test_a_mismatched_pair_is_not_presented_as_corroboration(self):
+        # The measured false positive: same phrasing, different races. These
+        # cluster because they share almost every word; what separates them
+        # lives in the words they do not share, which set overlap discards.
         cluster = [
             claim("Fox", "Trump-backed candidate wins primary for New Hampshire district.",
                   {"trump", "backed", "candidate", "wins", "primary", "hampshire"}),
             claim("Politico", "Trump-backed candidate wins primary for Oklahoma governor.",
                   {"trump", "backed", "candidate", "wins", "primary", "oklahoma"}),
         ]
+        key_points, singles = app._split_clusters([cluster])
+        self.assertEqual(key_points, [], "two different races asserted as one agreed fact")
+        self.assertEqual(len(singles), 1, "the claim should still appear, just not as corroboration")
+
+    def test_accounts_naming_the_same_specifics_are_kept(self):
+        # Measured genuine pair: the same statement, worded differently.
+        cluster = [
+            claim("BBC", 'A Reform UK spokesman said the party "denies any wrongdoing".',
+                  {"reform", "spokesman", "party", "denies", "wrongdoing"}),
+            claim("The Guardian", 'A Reform UK spokesperson said the party "denies any wrongdoing".',
+                  {"reform", "spokesperson", "party", "denies", "wrongdoing"}),
+        ]
         key_points, _ = app._split_clusters([cluster])
-        sentences = [a["sentence"] for a in key_points[0]["accounts"]]
-        self.assertEqual(len(sentences), 2)
-        self.assertTrue(any("Hampshire" in s for s in sentences))
-        self.assertTrue(any("Oklahoma" in s for s in sentences))
+        self.assertEqual(len(key_points), 1)
+        self.assertEqual(len(key_points[0]["accounts"]), 2)
+
+    def test_one_source_saying_more_than_another_is_tolerated(self):
+        # A real pair where one headline carries detail the other omits. The
+        # tolerance exists so that extra detail is not read as disagreement.
+        cluster = [
+            claim("BBC", "The UK economy grew at its fastest rate for more than two years.",
+                  {"economy", "grew", "fastest", "rate", "years"}),
+            claim("The Guardian", "AI helps UK economy grow at fastest pace for more than two years",
+                  {"helps", "economy", "grow", "fastest", "pace", "years"}),
+        ]
+        key_points, _ = app._split_clusters([cluster])
+        self.assertEqual(len(key_points), 1)
 
     def test_a_source_with_several_claims_contributes_its_richest(self):
         cluster = [
